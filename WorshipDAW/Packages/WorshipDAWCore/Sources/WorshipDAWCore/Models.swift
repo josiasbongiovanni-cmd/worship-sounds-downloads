@@ -213,6 +213,34 @@ public enum TrackInput: Codable, Hashable, Sendable {
     }
 }
 
+/// Monitoreo de entrada de una pista armada (clic derecho en el botón de armar en REAPER).
+public enum MonitorMode: String, Codable, CaseIterable, Sendable {
+    /// No se escucha la entrada.
+    case off
+    /// Siempre se escucha la entrada mientras la pista está armada.
+    case on
+    /// Estilo cinta: se escucha la entrada al estar detenido o grabando; al reproducir se oye lo grabado.
+    case auto
+
+    public var displayName: String {
+        switch self {
+        case .off: "Apagado"
+        case .on: "Encendido"
+        case .auto: "Automático (estilo cinta)"
+        }
+    }
+
+    /// ¿Se escucha la entrada en este momento?
+    public func isMonitoring(armed: Bool, playing: Bool, recording: Bool) -> Bool {
+        guard armed else { return false }
+        switch self {
+        case .off: return false
+        case .on: return true
+        case .auto: return recording || !playing
+        }
+    }
+}
+
 public struct Track: Identifiable, Codable, Hashable, Sendable {
     public var id: UUID
     public var name: String
@@ -226,13 +254,15 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
     public var isSolo: Bool
     public var isArmed: Bool
     public var input: TrackInput
+    public var monitor: MonitorMode
     public var eq: ChannelEQ
     public var inserts: [PluginRef]
     public var clips: [Clip]
 
     public init(id: UUID = UUID(), name: String, color: TrackColor = .violet, role: TrackRole = .audio,
                 volumeDB: Double = 0, pan: Double = 0, isMuted: Bool = false, isSolo: Bool = false,
-                isArmed: Bool = false, input: TrackInput = .mono(0), eq: ChannelEQ = ChannelEQ(),
+                isArmed: Bool = false, input: TrackInput = .mono(0), monitor: MonitorMode = .off,
+                eq: ChannelEQ = ChannelEQ(),
                 inserts: [PluginRef] = [], clips: [Clip] = []) {
         self.id = id
         self.name = name
@@ -244,6 +274,7 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
         self.isSolo = isSolo
         self.isArmed = isArmed
         self.input = input
+        self.monitor = monitor
         self.eq = eq
         self.inserts = inserts
         self.clips = clips
@@ -266,6 +297,7 @@ extension Track {
         isSolo = try c.decodeIfPresent(Bool.self, forKey: .isSolo) ?? false
         isArmed = try c.decodeIfPresent(Bool.self, forKey: .isArmed) ?? false
         input = try c.decodeIfPresent(TrackInput.self, forKey: .input) ?? .mono(0)
+        monitor = try c.decodeIfPresent(MonitorMode.self, forKey: .monitor) ?? .off
         eq = try c.decodeIfPresent(ChannelEQ.self, forKey: .eq) ?? ChannelEQ()
         inserts = try c.decodeIfPresent([PluginRef].self, forKey: .inserts) ?? []
         clips = try c.decodeIfPresent([Clip].self, forKey: .clips) ?? []

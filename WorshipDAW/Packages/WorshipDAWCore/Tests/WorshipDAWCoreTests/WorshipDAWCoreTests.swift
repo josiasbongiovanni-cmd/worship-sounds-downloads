@@ -155,5 +155,29 @@ final class ReaperParityTests: XCTestCase {
         XCTAssertEqual(p.name, "Viejo")
         XCTAssertTrue(p.markers.isEmpty)
         XCTAssertEqual(p.tracks.first?.input, .mono(0))
+        XCTAssertEqual(p.tracks.first?.monitor, .off)
+    }
+
+    func testMonitorModes() {
+        XCTAssertFalse(MonitorMode.on.isMonitoring(armed: false, playing: false, recording: false))
+        XCTAssertTrue(MonitorMode.on.isMonitoring(armed: true, playing: true, recording: false))
+        // Estilo cinta: al reproducir se oye lo grabado, al grabar o detenido se oye la entrada.
+        XCTAssertFalse(MonitorMode.auto.isMonitoring(armed: true, playing: true, recording: false))
+        XCTAssertTrue(MonitorMode.auto.isMonitoring(armed: true, playing: true, recording: true))
+        XCTAssertTrue(MonitorMode.auto.isMonitoring(armed: true, playing: false, recording: false))
+        XCTAssertFalse(MonitorMode.off.isMonitoring(armed: true, playing: false, recording: true))
+    }
+
+    func testRecordingAlignment() {
+        // Grabación que arrancó 0,25 s después del inicio de la reproducción, con 12 ms de latencia,
+        // reproduciendo desde -2 s (cuenta previa) y cursor en 0: el ítem empieza en 0.
+        let a = RecordingAlignment.compute(playFrom: -2, editCursor: 0, captureDelay: 0.25, latency: 0.012)
+        XCTAssertEqual(a.start, 0, accuracy: 1e-9)
+        // El archivo empezó en -1,762 s de la línea de tiempo: hay que saltar 1,762 s del archivo.
+        XCTAssertEqual(a.fileOffset, 1.762, accuracy: 1e-9)
+        // Sin cuenta previa: el ítem empieza en el cursor menos la latencia compensada.
+        let b = RecordingAlignment.compute(playFrom: 10, editCursor: 10, captureDelay: 0.05, latency: 0.02)
+        XCTAssertEqual(b.start, 10.03, accuracy: 1e-9)
+        XCTAssertEqual(b.fileOffset, 0, accuracy: 1e-9)
     }
 }

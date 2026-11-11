@@ -21,7 +21,14 @@ struct PositionDisplay: View {
                     .foregroundStyle(Theme.textSecondary)
             }
             .frame(minWidth: compact ? 72 : 96, alignment: .leading)
-            if let section = session.project.section(at: session.playhead) {
+            if session.isRecording && session.playhead < session.editCursor - 0.01 {
+                Text("Cuenta…")
+                    .font(Theme.display(compact ? 12 : 13, weight: .bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Theme.record.opacity(0.22)))
+                    .foregroundStyle(Theme.record)
+            } else if let section = session.project.section(at: session.playhead) {
                 Text(compact ? section.kind.shortName : section.name)
                     .font(Theme.display(compact ? 12 : 13, weight: .bold))
                     .padding(.horizontal, 10)

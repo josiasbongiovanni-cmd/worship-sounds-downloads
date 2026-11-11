@@ -5,3 +5,6 @@ Support/Info-*.plist
 .swiftpm/
 DerivedData/
 xcuserdata/
+build/
+*.zip
+*.log

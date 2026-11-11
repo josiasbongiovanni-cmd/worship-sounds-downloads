@@ -58,3 +58,26 @@ jobs:
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO | tee ios-build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" ios-build.log
+
+      - name: App para Mac lista para probar (Release, firma ad-hoc)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project WorshipDAW.xcodeproj \
+            -scheme WorshipDAW-macOS \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= | tee release-build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" release-build.log
+          ditto -c -k --keepParent "build/Build/Products/Release/Worship DAW.app" WorshipDAW-mac.zip
+
+      - name: Subir app de Mac
+        uses: actions/upload-artifact@v4
+        with:
+          name: WorshipDAW-mac
+          path: WorshipDAW/WorshipDAW-mac.zip
+          retention-days: 30

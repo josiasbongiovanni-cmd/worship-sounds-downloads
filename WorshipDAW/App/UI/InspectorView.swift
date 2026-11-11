@@ -81,6 +81,10 @@ struct TrackInspector: View {
                         Menu(track.input.displayName) { TrackInputMenu(session: session, track: track) }
                             .fixedSize()
                     }
+                    Picker("Monitoreo", selection: Binding(get: { track.monitor }, set: { m in session.updateTrack(id) { $0.monitor = m } })) {
+                        ForEach(MonitorMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                    }
+                    .font(.system(size: 12))
                 }
 
                 VStack(alignment: .leading, spacing: 8) {

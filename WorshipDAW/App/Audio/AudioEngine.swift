@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 import WorshipDAWCore
 
 /// Niveles de picos escritos desde los hilos de audio y leídos por la UI (~30 fps).
@@ -35,6 +36,10 @@ final class MeterBank: @unchecked Sendable {
 @MainActor
 final class TrackStrip {
     let player = AVAudioPlayerNode()
+    /// Suma lo grabado (player) y la entrada en vivo (monitoreo) antes del EQ y los plugins.
+    let inMix = AVAudioMixerNode()
+    var monitorNode: AVAudioSourceNode?
+    let monitorState = MonitorState()
     let eq = AVAudioUnitEQ(numberOfBands: 3)
     let fader = AVAudioMixerNode()
     var inserts: [(ref: PluginRef, unit: AVAudioUnit)] = []
@@ -43,13 +48,17 @@ final class TrackStrip {
 
     /// Nodos en orden de señal, del player al fader.
     var chain: [AVAudioNode] {
-        var nodes: [AVAudioNode] = [player, eq]
+        var nodes: [AVAudioNode] = [player, inMix, eq]
         for insert in inserts { nodes.append(insert.unit) }
         nodes.append(fader)
         return nodes
     }
 
-    var allNodes: [AVAudioNode] { chain }
+    var allNodes: [AVAudioNode] {
+        var nodes = chain
+        if let monitorNode { nodes.append(monitorNode) }
+        return nodes
+    }
 
     init() {
         let low = eq.bands[0]
@@ -98,6 +107,14 @@ final class AudioEngine {
 
     private var inputPrepared = false
     private var recordingFile: AVAudioFile?
+    private var captureClock: CaptureClock?
+    private var playStartHostTime: UInt64 = 0
+    private(set) var playStartPosition: TimeInterval = 0
+
+    // Monitoreo de entrada
+    private var inputRing: InputRing?
+    private var sinkNode: AVAudioSinkNode?
+    private var monitorFormat: AVAudioFormat?
     private var configObserver: NSObjectProtocol?
 
     var onError: ((String) -> Void)?
@@ -143,7 +160,22 @@ final class AudioEngine {
             if inputPrepared { settings.applyInput(to: engine) }
             engine.prepare()
             try engine.start()
+            reportLatency()
         }
+    }
+
+    /// Latencia que reporta el dispositivo (para mostrarla y compensar la grabación).
+    private func reportLatency() {
+        let output = engine.outputNode.presentationLatency
+        let input = inputPrepared ? engine.inputNode.presentationLatency : 0
+        settings.reportedRoundTrip = input + output
+    }
+
+    /// Segundos a compensar al colocar una grabación.
+    var recordingLatency: TimeInterval {
+        let reported = settings.useReportedLatency
+            ? engine.inputNode.presentationLatency + engine.outputNode.presentationLatency : 0
+        return reported + settings.manualLatencyOffsetMs / 1000
     }
 
     /// Vuelve a abrir el dispositivo con la configuración actual (Preferencias › Audio).
@@ -158,6 +190,7 @@ final class AudioEngine {
         do {
             engine.prepare()
             try engine.start()
+            reportLatency()
         } catch {
             onError?("No se pudo iniciar el dispositivo de audio: \(error.localizedDescription)")
             return
@@ -196,6 +229,7 @@ final class AudioEngine {
             } else {
                 strip = TrackStrip()
                 engine.attach(strip.player)
+                engine.attach(strip.inMix)
                 engine.attach(strip.eq)
                 engine.attach(strip.fader)
                 engine.connect(strip.fader, to: engine.mainMixerNode, format: format)
@@ -210,6 +244,7 @@ final class AudioEngine {
 
         clickBus.outputVolume = project.isClickEnabled ? Decibels.toLinear(project.clickVolumeDB) : 0
         engine.mainMixerNode.outputVolume = Decibels.toLinear(project.masterVolumeDB)
+        updateMonitoring()
     }
 
     private func apply(track: Track, audible: Bool, to strip: TrackStrip) {
@@ -232,7 +267,65 @@ final class AudioEngine {
             engine.disconnectNodeOutput(node)
         }
         for (a, b) in zip(nodes, nodes.dropFirst()) {
-            engine.connect(a, to: b, format: format)
+            if b === strip.inMix {
+                // Bus 0 = lo grabado; bus 1 = monitoreo de entrada.
+                engine.connect(a, to: b, fromBus: 0, toBus: 0, format: format)
+            } else {
+                engine.connect(a, to: b, format: format)
+            }
+        }
+    }
+
+    // MARK: - Monitoreo de entrada (escucharte con EQ y plugins mientras grabas)
+
+    /// Activa o desactiva el monitoreo de cada pista según su modo, si está armada y el transporte.
+    func updateMonitoring() {
+        guard let project = latestProject else { return }
+        var wanted: [(TrackStrip, Track)] = []
+        for track in project.tracks {
+            guard let strip = strips[track.id] else { continue }
+            let on = track.input != .off
+                && track.monitor.isMonitoring(armed: track.isArmed, playing: isPlaying, recording: isRecording)
+            if on { wanted.append((strip, track)) } else { strip.monitorState.isActive.store(false, ordering: .relaxed) }
+        }
+        guard !wanted.isEmpty else { return }
+        if inputRing == nil {
+            do { try setUpMonitoringGraph() } catch {
+                onError?(error.localizedDescription)
+                return
+            }
+        }
+        guard let ring = inputRing, let monitorFormat else { return }
+        for (strip, track) in wanted {
+            if strip.monitorNode == nil {
+                let node = InputMonitor.makeSourceNode(ring: ring, state: strip.monitorState, format: monitorFormat)
+                engine.attach(node)
+                engine.connect(node, to: strip.inMix, fromBus: 0, toBus: 1, format: monitorFormat)
+                strip.monitorNode = node
+            }
+            let map = track.input.channelMap ?? [0, 0]
+            strip.monitorState.leftChannel.store(map[0], ordering: .relaxed)
+            strip.monitorState.rightChannel.store(map[1], ordering: .relaxed)
+            strip.monitorState.isActive.store(true, ordering: .relaxed)
+        }
+    }
+
+    private func setUpMonitoringGraph() throws {
+        try prepareInput()
+        let inFormat = engine.inputNode.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw EngineError.noInput }
+        let ring = InputRing(channels: Int(inFormat.channelCount))
+        let sink = InputMonitor.makeSinkNode(ring: ring)
+        let wasRunning = engine.isRunning
+        engine.stop()
+        engine.attach(sink)
+        engine.connect(engine.inputNode, to: sink, format: inFormat)
+        inputRing = ring
+        sinkNode = sink
+        monitorFormat = AVAudioFormat(standardFormatWithSampleRate: inFormat.sampleRate, channels: 2)
+        if wasRunning {
+            engine.prepare()
+            try engine.start()
         }
     }
 
@@ -314,17 +407,22 @@ final class AudioEngine {
             return
         }
         schedule(project: project, from: position)
-        let startTime = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.06))
+        let startHost = mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.06)
+        let startTime = AVAudioTime(hostTime: startHost)
         for strip in strips.values { strip.player.play(at: startTime) }
         clickPlayer.play(at: startTime)
         startPosition = position
+        playStartPosition = position
+        playStartHostTime = startHost
         isPlaying = true
+        updateMonitoring()
     }
 
     func stop() {
         if isPlaying { startPosition = currentPosition }
         stopPlayers()
         isPlaying = false
+        updateMonitoring()
     }
 
     private func stopPlayers() {
@@ -364,7 +462,8 @@ final class AudioEngine {
         }
         guard let bar = clickBuffer?.buffer else { return }
         let barFrames = Int(bar.frameLength)
-        let offset = Int((position * sr).rounded()) % max(1, barFrames)
+        let n = max(1, barFrames)
+        let offset = ((Int((position * sr).rounded()) % n) + n) % n
         var at: AVAudioFramePosition = 0
         if offset > 0, let tail = Metronome.tail(of: bar, from: offset) {
             clickPlayer.scheduleBuffer(tail, at: AVAudioTime(sampleTime: 0, atRate: sr), options: [],
@@ -405,18 +504,40 @@ final class AudioEngine {
         ]
         let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32,
                                    interleaved: inFormat.isInterleaved)
+        let clock = CaptureClock()
         recordingFile = file
+        captureClock = clock
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat, block: Self.recordTap(file, meters: meters))
+        input.installTap(onBus: 0, bufferSize: 1024, format: inFormat,
+                         block: Self.recordTap(file, clock: clock, meters: meters))
+        updateMonitoring()
     }
 
-    /// Detiene la grabación y devuelve si se escribió audio.
-    func stopRecording() -> Bool {
-        guard let file = recordingFile else { return false }
+    struct RecordingResult {
+        let wroteAudio: Bool
+        /// Segundos entre el inicio de la reproducción y la primera muestra capturada.
+        let captureDelay: TimeInterval
+        let latency: TimeInterval
+        let playFrom: TimeInterval
+    }
+
+    /// Detiene la grabación y devuelve los datos para alinearla en la línea de tiempo.
+    func stopRecording() -> RecordingResult {
+        guard let file = recordingFile else {
+            return RecordingResult(wroteAudio: false, captureDelay: 0, latency: 0, playFrom: playStartPosition)
+        }
         engine.inputNode.removeTap(onBus: 0)
         let wrote = file.length > 0
+        var delay: TimeInterval = 0
+        if let first = captureClock?.firstHostTime.load(ordering: .acquiring), first != 0, playStartHostTime != 0 {
+            delay = AVAudioTime.seconds(forHostTime: first) - AVAudioTime.seconds(forHostTime: playStartHostTime)
+        }
+        let result = RecordingResult(wroteAudio: wrote, captureDelay: delay, latency: recordingLatency,
+                                     playFrom: playStartPosition)
         recordingFile = nil
-        return wrote
+        captureClock = nil
+        updateMonitoring()
+        return result
     }
 
     var isRecording: Bool { recordingFile != nil }
@@ -431,8 +552,13 @@ final class AudioEngine {
         engine.stop()
         let clickVolume = clickBus.outputVolume
         clickBus.outputVolume = 0
+        // El render offline no tiene entrada: desconectar el monitoreo mientras tanto.
+        for strip in strips.values { strip.monitorState.isActive.store(false, ordering: .relaxed) }
+        let inputFormat = sinkNode != nil ? engine.inputNode.outputFormat(forBus: 0) : nil
+        if sinkNode != nil { engine.disconnectNodeOutput(engine.inputNode) }
         defer {
             engine.disableManualRenderingMode()
+            if let sinkNode, let inputFormat { engine.connect(engine.inputNode, to: sinkNode, format: inputFormat) }
             clickBus.outputVolume = clickVolume
             try? start()
         }
@@ -496,8 +622,11 @@ final class AudioEngine {
         }
     }
 
-    nonisolated private static func recordTap(_ file: AVAudioFile, meters: MeterBank) -> AVAudioNodeTapBlock {
-        { buffer, _ in
+    nonisolated private static func recordTap(_ file: AVAudioFile, clock: CaptureClock, meters: MeterBank) -> AVAudioNodeTapBlock {
+        { buffer, when in
+            if when.isHostTimeValid, clock.firstHostTime.load(ordering: .relaxed) == 0 {
+                clock.firstHostTime.store(when.hostTime, ordering: .releasing)
+            }
             try? file.write(from: buffer)
             meters.push(peak(of: buffer), for: MeterBank.inputID)
         }
@@ -522,4 +651,9 @@ final class AudioEngine {
 
 extension MeterBank {
     static let inputID = UUID(uuidString: "00000000-0000-0000-0000-00000000BBBB")!
+}
+
+/// Hora (host time) de la primera muestra grabada; la escribe el hilo de audio.
+final class CaptureClock: @unchecked Sendable {
+    let firstHostTime = Atomic<UInt64>(0)
 }

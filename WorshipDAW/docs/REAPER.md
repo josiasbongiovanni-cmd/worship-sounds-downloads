@@ -24,7 +24,9 @@ Estado: ✅ hecho · 🟡 parcial · ⏳ pendiente
 | Volumen, paneo, Mute, Solo, armar (R). | Igual en la cabecera y en el mezclador. | ✅ |
 | Clic derecho en el botón de armar: elegir entrada (mono, estéreo, ninguna). | Igual. | ✅ |
 | Grabación multipista: cada pista armada graba su entrada al mismo tiempo. | Igual (se graba la interfaz completa y cada pista toma sus canales). | ✅ |
-| Monitoreo de entrada (escucharte con efectos mientras grabas). | Usa el monitoreo directo de tu interfaz por ahora. | ⏳ |
+| Monitoreo de entrada (escucharte con efectos mientras grabas): apagado / encendido / automático estilo cinta. | Igual, en el menú del botón R. La entrada pasa por el EQ, los plugins y el fader de la pista. | ✅ |
+| Compensación de latencia de grabación (latencia del driver + ajuste manual). | Igual, en Preferencias › Audio › Grabación. | ✅ |
+| Cuenta previa antes de grabar. | 0, 1 o 2 compases; la cuenta no queda en la toma. | ✅ |
 | Botón FX: cadena de plugins por pista. | Inserts por pista en el mezclador. | ✅ |
 | Carpetas (folder tracks), sends/receives, buses. | — | ⏳ |
 | Envolventes / automatización (volumen, paneo, parámetros de plugins). | — | ⏳ |
@@ -96,7 +98,7 @@ REAPER carga VST, VST3, AU y CLAP. Worship DAW usa **Audio Units**, el formato n
 
 ## 5. Próximas fases sugeridas
 
-1. Monitoreo de entrada con efectos y compensación de latencia al grabar.
+1. ~~Monitoreo de entrada con efectos y compensación de latencia al grabar.~~ ✅
 2. Fades, volumen por ítem y crossfades.
 3. Envolventes de automatización (volumen, paneo, parámetros de plugins), con escritura por MIDI.
 4. Carpetas, sends y buses (click y guía a salidas separadas para in-ears).

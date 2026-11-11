@@ -50,6 +50,29 @@ final class AudioSettings {
         set { storedRate = newValue; save() }
     }
 
+    // Grabación (Preferencias › Grabación en REAPER)
+    private var storedUseReported: Bool
+    private var storedManualOffset: Double
+    private var storedCountIn: Int
+
+    /// Compensar la latencia que reporta el driver ("use audio driver reported latency").
+    var useReportedLatency: Bool {
+        get { storedUseReported }
+        set { storedUseReported = newValue; save() }
+    }
+    /// Ajuste manual en milisegundos (positivo = mover la grabación antes).
+    var manualLatencyOffsetMs: Double {
+        get { storedManualOffset }
+        set { storedManualOffset = newValue; save() }
+    }
+    /// Compases de cuenta previa antes de grabar (0 = sin cuenta).
+    var countInBars: Int {
+        get { storedCountIn }
+        set { storedCountIn = newValue; save() }
+    }
+    /// Latencia de ida y vuelta que reporta el dispositivo (segundos).
+    var reportedRoundTrip: Double = 0
+
     /// Estado real reportado por el sistema después de aplicar.
     var actualBufferSize: Int = 0
     var actualSampleRate: Double = 0
@@ -72,6 +95,9 @@ final class AudioSettings {
         storedBuffer = max(0, buffer)  // 0 = no pedir (como REAPER por defecto)
         let rate = d.double(forKey: "audio.sampleRate")
         storedRate = max(0, rate)
+        storedUseReported = d.object(forKey: "rec.useReportedLatency") as? Bool ?? true
+        storedManualOffset = d.double(forKey: "rec.manualOffsetMs")
+        storedCountIn = max(0, d.integer(forKey: "rec.countInBars"))
         refreshDevices()
     }
 
@@ -80,6 +106,9 @@ final class AudioSettings {
         defaults.set(storedOutput, forKey: "audio.outputDevice")
         defaults.set(storedBuffer, forKey: "audio.bufferSize")
         defaults.set(storedRate, forKey: "audio.sampleRate")
+        defaults.set(storedUseReported, forKey: "rec.useReportedLatency")
+        defaults.set(storedManualOffset, forKey: "rec.manualOffsetMs")
+        defaults.set(storedCountIn, forKey: "rec.countInBars")
     }
 
     func refreshDevices() {

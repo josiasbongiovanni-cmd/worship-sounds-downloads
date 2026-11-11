@@ -56,6 +56,12 @@ struct TrackHeaderView: View {
                         session.updateTrack(track.id) { $0.isArmed.toggle() }
                     }
                     .contextMenu { TrackInputMenu(session: session, track: track) }
+                    if track.isArmed && track.monitor != .off {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Theme.solo)
+                            .help("Monitoreo: \(track.monitor.displayName)")
+                    }
                     if track.isArmed {
                         Text(track.input.shortName)
                             .font(.system(size: 9, weight: .bold, design: .rounded))
@@ -369,6 +375,15 @@ struct TrackInputMenu: View {
                     ForEach(Array(stride(from: 0, to: channels - 1, by: 2)), id: \.self) { c in
                         Button { set(.stereo(c)) } label: { label(TrackInput.stereo(c).displayName, .stereo(c)) }
                     }
+                }
+            }
+        }
+        Section("Monitoreo de entrada") {
+            ForEach(MonitorMode.allCases, id: \.self) { mode in
+                Button {
+                    session.updateTrack(track.id) { $0.monitor = mode }
+                } label: {
+                    if track.monitor == mode { Label(mode.displayName, systemImage: "checkmark") } else { Text(mode.displayName) }
                 }
             }
         }

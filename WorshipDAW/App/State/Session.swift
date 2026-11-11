@@ -137,8 +137,13 @@ final class Session {
     }
 
     func play() {
-        playhead = editCursor
-        audio.play(project: project, from: playhead)
+        startPlayback(from: editCursor)
+    }
+
+    /// Arranca el transporte desde `position` (puede ser negativa durante la cuenta previa).
+    private func startPlayback(from position: TimeInterval) {
+        playhead = position
+        audio.play(project: project, from: position)
         isPlaying = audio.isPlaying
         if isPlaying { startTicker() }
     }
@@ -233,16 +238,21 @@ final class Session {
             }
             recording = (tempURL, editCursor, targets)
             isRecording = true
-            play()
+            // Cuenta previa: arrancar N compases antes (solo suena el click y lo ya grabado).
+            let countIn = Double(audio.settings.countInBars) * project.timeline.secondsPerBar
+            startPlayback(from: editCursor - countIn)
         }
     }
 
     private func finishRecording() {
         guard let info = recording else { return }
         recording = nil
-        let wrote = audio.stopRecording()
+        let result = audio.stopRecording()
         isRecording = false
-        guard wrote else { return }
+        guard result.wroteAudio else { return }
+        // Colocar la toma donde realmente se tocó: compensa la latencia y descarta la cuenta previa.
+        let placement = RecordingAlignment.compute(playFrom: result.playFrom, editCursor: info.start,
+                                                   captureDelay: result.captureDelay, latency: result.latency)
         let takeNumber = project.tracks.flatMap(\.clips).filter { $0.name.contains("Toma") }.count + 1
         // Cada pista toma sus canales de la grabación multicanal (Entrada 1, Entradas 3/4…).
         var byInput: [[Int]: [UUID]] = [:]
@@ -254,11 +264,14 @@ final class Session {
             for (map, ids) in byInput {
                 do {
                     let (fileName, duration) = try await ingest(source: info.url, channelMap: map)
+                    let audible = duration - placement.fileOffset
+                    guard audible > 0.01 else { continue }
                     edit { p in
                         for id in ids {
                             guard let i = p.trackIndex(id) else { continue }
                             p.addClip(Clip(name: "\(p.tracks[i].name) · Toma \(takeNumber)", fileName: fileName,
-                                           start: info.start, duration: duration), toTrack: id)
+                                           start: placement.start, offset: placement.fileOffset,
+                                           duration: audible, sourceDuration: duration), toTrack: id)
                         }
                     }
                 } catch {

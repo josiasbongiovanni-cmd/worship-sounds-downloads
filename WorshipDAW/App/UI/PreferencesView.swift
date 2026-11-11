@@ -89,6 +89,24 @@ struct AudioPreferences: View {
                 Text("Buffers chicos (64–128) bajan la latencia al grabar; buffers grandes (512–1024) dan más estabilidad al mezclar con muchos plugins.")
             }
 
+            Section {
+                Toggle("Compensar la latencia que reporta el dispositivo", isOn: binding(\.useReportedLatency))
+                LabeledContent("Latencia reportada (ida y vuelta)",
+                               value: settings.reportedRoundTrip > 0 ? String(format: "%.1f ms", settings.reportedRoundTrip * 1000) : "—")
+                Stepper(value: binding(\.manualLatencyOffsetMs), in: -200...200, step: 1) {
+                    LabeledContent("Ajuste manual", value: String(format: "%+.0f ms", settings.manualLatencyOffsetMs))
+                }
+                Picker("Cuenta previa al grabar", selection: binding(\.countInBars)) {
+                    Text("Sin cuenta").tag(0)
+                    Text("1 compás").tag(1)
+                    Text("2 compases").tag(2)
+                }
+            } header: {
+                Text("Grabación")
+            } footer: {
+                Text("Para calibrar: graba el click con un micrófono y ajusta hasta que la toma quede alineada con la grilla. Positivo adelanta la toma.")
+            }
+
             if let error = settings.lastError {
                 Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
             }
