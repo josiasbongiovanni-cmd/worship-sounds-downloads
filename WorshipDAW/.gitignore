@@ -1,0 +1,7 @@
+# Generado por XcodeGen (`xcodegen generate`)
+WorshipDAW.xcodeproj/
+Support/Info-*.plist
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
