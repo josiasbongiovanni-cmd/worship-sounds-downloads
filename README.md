@@ -8,6 +8,7 @@ Descargalos desde **[Releases](../../releases/latest)**.
 | Worship Vocal Rack | WorshipVocalRack-1.0.0-mac.pkg | WorshipVocalRack-1.0.0-windows.zip |
 | WorshipGuitar | WorshipGuitar-1.0.0-mac.pkg | WorshipGuitar-1.0.0-windows.zip |
 | WorshipMastering | WorshipMastering-1.0.0-mac.pkg | WorshipMastering-1.0.0-windows.zip |
+| WorshipChoir | WorshipChoir-1.0.0-mac.pkg | WorshipChoir-1.0.0-windows.zip |
 
 Mac: macOS 11 o superior (Apple Silicon e Intel). Instaladores firmados y notarizados por Apple.
 
