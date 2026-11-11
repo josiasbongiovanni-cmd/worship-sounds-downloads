@@ -72,6 +72,18 @@ struct TrackInspector: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
+                    label("Grabación")
+                    HStack {
+                        Toggle("Armada", isOn: Binding(get: { track.isArmed }, set: { on in session.updateTrack(id) { $0.isArmed = on } }))
+                            .toggleStyle(.button)
+                            .tint(Theme.record)
+                        Spacer()
+                        Menu(track.input.displayName) { TrackInputMenu(session: session, track: track) }
+                            .fixedSize()
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         label("EQ de canal")
                         Spacer()

@@ -3,6 +3,7 @@ import WorshipDAWCore
 
 struct MixerView: View {
     @Bindable var session: Session
+    let midi: MIDIManager
     @State private var pluginTarget: UUID?
     @State private var editingPlugin: PluginEditorTarget?
 
@@ -10,11 +11,11 @@ struct MixerView: View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {
                 ForEach(session.project.tracks) { track in
-                    ChannelStrip(session: session, track: track,
+                    ChannelStrip(session: session, track: track, midi: midi,
                                  onAddPlugin: { pluginTarget = track.id },
                                  onOpenPlugin: { ref in editingPlugin = PluginEditorTarget(trackID: track.id, plugin: ref) })
                 }
-                MasterStrip(session: session)
+                MasterStrip(session: session, midi: midi)
             }
             .padding(10)
         }
@@ -45,6 +46,7 @@ struct PluginEditorTarget: Identifiable {
 struct ChannelStrip: View {
     @Bindable var session: Session
     let track: Track
+    let midi: MIDIManager
     var onAddPlugin: () -> Void
     var onOpenPlugin: (PluginRef) -> Void
 
@@ -140,6 +142,13 @@ struct ChannelStrip: View {
                 PillToggle(label: "R", isOn: track.isArmed, tint: Theme.record, size: 22) {
                     session.updateTrack(track.id) { $0.isArmed.toggle() }
                 }
+                .contextMenu { TrackInputMenu(session: session, track: track) }
+            }
+            if track.isArmed {
+                Text(track.input.displayName)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.record)
+                    .lineLimit(1)
             }
         }
         .padding(.horizontal, 8)
@@ -155,6 +164,33 @@ struct ChannelStrip: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { session.selectedTrackID = track.id }
+        .contextMenu { midiLearnMenu }
+    }
+
+    /// "Aprender MIDI" (Learn en REAPER): el próximo control que muevas queda asignado.
+    @ViewBuilder private var midiLearnMenu: some View {
+        if let index = session.project.trackIndex(track.id) {
+            Section("Aprender MIDI") {
+                ForEach([MIDITarget.trackVolume(index), .trackPan(index), .trackMute(index), .trackSolo(index), .trackArm(index)], id: \.self) { target in
+                    Button {
+                        midi.learning = target
+                    } label: {
+                        if let m = midi.mapping(for: target) {
+                            Text("\(target.displayName) — \(m.sourceLabel)")
+                        } else {
+                            Text(target.displayName)
+                        }
+                    }
+                }
+            }
+            Section {
+                Button("Quitar asignaciones MIDI de esta pista") {
+                    for t in [MIDITarget.trackVolume(index), .trackPan(index), .trackMute(index), .trackSolo(index), .trackArm(index)] {
+                        midi.clearMapping(for: t)
+                    }
+                }
+            }
+        }
     }
 
     private func eqKnob(_ label: String, value: WritableKeyPath<ChannelEQ, Double>, tint: Color) -> some View {
@@ -167,6 +203,7 @@ struct ChannelStrip: View {
 
 struct MasterStrip: View {
     @Bindable var session: Session
+    var midi: MIDIManager?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -205,6 +242,11 @@ struct MasterStrip: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1)
         )
+        .contextMenu {
+            if let midi {
+                Button("Aprender MIDI: volumen master") { midi.learning = .masterVolume }
+            }
+        }
     }
 }
 

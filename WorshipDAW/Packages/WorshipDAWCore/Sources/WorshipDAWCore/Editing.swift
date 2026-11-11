@@ -111,6 +111,42 @@ public extension Project {
         return copy.id
     }
 
+    // MARK: Marcadores
+
+    /// Inserta un marcador con el primer número libre (como M en REAPER).
+    @discardableResult
+    mutating func addMarker(at time: TimeInterval, name: String = "") -> Marker {
+        let used = Set(markers.map(\.number))
+        var n = 1
+        while used.contains(n) { n += 1 }
+        let marker = Marker(number: n, name: name, time: max(0, time))
+        markers.append(marker)
+        markers.sort { $0.time < $1.time }
+        return marker
+    }
+
+    mutating func removeMarker(_ id: UUID) {
+        markers.removeAll { $0.id == id }
+    }
+
+    func marker(number: Int) -> Marker? {
+        markers.first { $0.number == number }
+    }
+
+    /// Siguiente punto de navegación (marcador o inicio de sección) después de `time`.
+    func nextStop(after time: TimeInterval) -> TimeInterval? {
+        (markers.map(\.time) + sections.map(\.start)).filter { $0 > time + 0.05 }.min()
+    }
+
+    func previousStop(before time: TimeInterval) -> TimeInterval? {
+        (markers.map(\.time) + sections.map(\.start)).filter { $0 < time - 0.05 }.max()
+    }
+
+    /// Mayor canal de entrada usado por las pistas armadas (para saber cuántos canales grabar).
+    var highestArmedInputChannel: Int {
+        tracks.filter(\.isArmed).map(\.input.highestChannel).max() ?? -1
+    }
+
     // MARK: Secciones
 
     func section(at time: TimeInterval) -> SongSection? {

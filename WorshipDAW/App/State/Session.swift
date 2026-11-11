@@ -16,7 +16,10 @@ final class Session {
     // Transporte
     var isPlaying = false
     var isRecording = false
+    /// Cursor de reproducción (se mueve mientras suena).
     var playhead: TimeInterval = 0
+    /// Cursor de edición (REAPER): donde arranca la reproducción y adonde vuelve al detener.
+    var editCursor: TimeInterval = 0
 
     // Selección y vista
     var selectedTrackID: UUID?
@@ -42,10 +45,10 @@ final class Session {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 
-    init(project: Project, url: URL) {
+    init(project: Project, url: URL, audioSettings: AudioSettings) {
         self.project = project
         self.url = url
-        self.audio = AudioEngine(sampleRate: project.sampleRate)
+        self.audio = AudioEngine(sampleRate: project.sampleRate, settings: audioSettings)
         selectedTrackID = project.tracks.first?.id
         audio.onError = { [weak self] message in self?.errorMessage = message }
         waveforms.onLoaded = { [weak self] in self?.waveformRevision += 1 }
@@ -134,6 +137,7 @@ final class Session {
     }
 
     func play() {
+        playhead = editCursor
         audio.play(project: project, from: playhead)
         isPlaying = audio.isPlaying
         if isPlaying { startTicker() }
@@ -142,20 +146,29 @@ final class Session {
     func stop() {
         if isRecording { finishRecording() }
         audio.stop()
-        if isPlaying { playhead = audio.currentPosition }
         isPlaying = false
         stopTicker()
+        // Como REAPER: al detener, el cursor vuelve al cursor de edición.
+        playhead = editCursor
     }
 
+    /// Mueve el cursor de edición (clic en la regla o en una pista). Si está sonando, salta ahí.
     func seek(to time: TimeInterval) {
-        playhead = max(0, time)
+        editCursor = max(0, time)
+        playhead = editCursor
         if isPlaying && !isRecording {
             audio.play(project: project, from: playhead)
         }
     }
 
+    /// Inicio (tecla Inicio).
     func returnToStart() {
-        seek(to: project.loop.isEnabled ? project.loop.start : 0)
+        seek(to: 0)
+    }
+
+    /// Fin del proyecto (tecla Fin).
+    func goToEnd() {
+        seek(to: project.contentEnd)
     }
 
     private func startTicker() {
@@ -176,7 +189,7 @@ final class Session {
         guard isPlaying else { return }
         let position = audio.currentPosition
         let loop = project.loop
-        if loop.isEnabled, !isRecording, loop.length > 0.1, position >= loop.end {
+        if loop.isEnabled, !isRecording, loop.length > 0.1, position >= loop.end, editCursor < loop.end {
             playhead = loop.start
             audio.play(project: project, from: loop.start)
             return
@@ -197,7 +210,7 @@ final class Session {
                 return
             }
             if isPlaying { stop() }
-            var targets = project.tracks.filter(\.isArmed).map(\.id)
+            var targets = project.tracks.filter { $0.isArmed && $0.input != .off }.map(\.id)
             if targets.isEmpty {
                 if let selected = selectedTrackID, project.trackIndex(selected) != nil {
                     targets = [selected]
@@ -218,7 +231,7 @@ final class Session {
                 errorMessage = error.localizedDescription
                 return
             }
-            recording = (tempURL, playhead, targets)
+            recording = (tempURL, editCursor, targets)
             isRecording = true
             play()
         }
@@ -230,27 +243,36 @@ final class Session {
         let wrote = audio.stopRecording()
         isRecording = false
         guard wrote else { return }
-        let takeNumber = project.tracks.flatMap(\.clips).filter { $0.name.hasPrefix("Toma") }.count + 1
+        let takeNumber = project.tracks.flatMap(\.clips).filter { $0.name.contains("Toma") }.count + 1
+        // Cada pista toma sus canales de la grabación multicanal (Entrada 1, Entradas 3/4…).
+        var byInput: [[Int]: [UUID]] = [:]
+        for id in info.trackIDs {
+            guard let i = project.trackIndex(id), let map = project.tracks[i].input.channelMap else { continue }
+            byInput[map, default: []].append(id)
+        }
         Task {
-            do {
-                let (fileName, duration) = try await ingest(source: info.url)
-                try? FileManager.default.removeItem(at: info.url)
-                edit { p in
-                    for id in info.trackIDs {
-                        p.addClip(Clip(name: "Toma \(takeNumber)", fileName: fileName, start: info.start,
-                                       duration: duration), toTrack: id)
+            for (map, ids) in byInput {
+                do {
+                    let (fileName, duration) = try await ingest(source: info.url, channelMap: map)
+                    edit { p in
+                        for id in ids {
+                            guard let i = p.trackIndex(id) else { continue }
+                            p.addClip(Clip(name: "\(p.tracks[i].name) · Toma \(takeNumber)", fileName: fileName,
+                                           start: info.start, duration: duration), toTrack: id)
+                        }
                     }
+                } catch {
+                    errorMessage = error.localizedDescription
                 }
-            } catch {
-                errorMessage = error.localizedDescription
             }
+            try? FileManager.default.removeItem(at: info.url)
         }
     }
 
     // MARK: - Importar audio
 
     /// Convierte un archivo al formato del proyecto, calcula su forma de onda y devuelve (archivo, duración).
-    private func ingest(source: URL) async throws -> (String, TimeInterval) {
+    private func ingest(source: URL, channelMap: [Int]? = nil) async throws -> (String, TimeInterval) {
         let fileName = UUID().uuidString + ".caf"
         let dest = ProjectStore.audioDirectory(of: url).appendingPathComponent(fileName)
         let peaksURL = ProjectStore.peaksDirectory(of: url).appendingPathComponent(fileName + ".peaks")
@@ -259,7 +281,8 @@ final class Session {
         let sampleRate = project.sampleRate
         let (duration, peaks) = try await Task.detached(priority: .userInitiated) {
             let duration = try AudioConverterService.convert(source: source, destination: dest,
-                                                             format: AudioFormats.project(sampleRate: sampleRate))
+                                                             format: AudioFormats.project(sampleRate: sampleRate),
+                                                             channelMap: channelMap)
             let peaks = try? WaveformPeaks.compute(from: dest)
             try? peaks?.write(to: peaksURL)
             return (duration, peaks)
@@ -395,14 +418,76 @@ final class Session {
         if let s = project.previousSection(before: playhead) { seek(to: s.start) } else { seek(to: 0) }
     }
 
+    // MARK: - Marcadores (M, 1–9)
+
+    func insertMarker() {
+        let time = isPlaying ? playhead : editCursor
+        edit { $0.addMarker(at: time) }
+    }
+
+    func goToMarker(_ number: Int) {
+        if let m = project.marker(number: number) { seek(to: m.time) }
+    }
+
+    func goToNextMarker() {
+        if let t = project.nextStop(after: playhead) { seek(to: t) }
+    }
+
+    func goToPreviousMarker() {
+        seek(to: project.previousStop(before: playhead) ?? 0)
+    }
+
+    // MARK: - Selección de tiempo (arrastrar en la regla; el loop la sigue)
+
+    func setTimeSelection(_ a: TimeInterval, _ b: TimeInterval) {
+        let start = max(0, min(a, b)), end = max(a, b)
+        guard end - start > 0.01 else { return }
+        edit(undoable: false) { p in
+            p.loop.start = start
+            p.loop.end = end
+        }
+    }
+
+    func clearTimeSelection() {
+        edit { p in
+            p.loop = LoopRegion(start: 0, end: 0, isEnabled: false)
+        }
+    }
+
+    var hasTimeSelection: Bool { project.loop.length > 0.01 }
+
+    // MARK: - MIDI
+
+    func handleMIDI(_ target: MIDITarget, value: Double) {
+        func track(_ i: Int, _ change: (inout Track) -> Void) {
+            guard project.tracks.indices.contains(i) else { return }
+            updateTrack(project.tracks[i].id, undoable: false, change)
+        }
+        switch target {
+        case .trackVolume(let i): track(i) { $0.volumeDB = (Fader.db(for: value) * 10).rounded() / 10 }
+        case .trackPan(let i): track(i) { $0.pan = ((value * 2 - 1) * 100).rounded() / 100 }
+        case .trackMute(let i): track(i) { $0.isMuted.toggle() }
+        case .trackSolo(let i): track(i) { $0.isSolo.toggle() }
+        case .trackArm(let i): track(i) { $0.isArmed.toggle() }
+        case .masterVolume: edit(undoable: false) { $0.masterVolumeDB = (Fader.db(for: value) * 10).rounded() / 10 }
+        case .playStop: togglePlay()
+        case .record: toggleRecord()
+        case .repeatToggle: toggleLoop()
+        case .nextMarker: goToNextMarker()
+        case .previousMarker: goToPreviousMarker()
+        case .goToStart: returnToStart()
+        }
+    }
+
     func loopSection(_ id: UUID) {
         edit { $0.loopSection(id) }
         if let s = project.sections.first(where: { $0.id == id }) { seek(to: s.start) }
     }
 
+    /// Repetir (tecla R en REAPER). Sin selección de tiempo, usa la sección actual.
     func toggleLoop() {
         edit { p in
-            if p.loop.length < 0.1, let s = p.section(at: playhead) {
+            if !p.loop.isEnabled, p.loop.length < 0.1, let s = p.section(at: playhead) {
                 p.loop = LoopRegion(start: s.start, end: s.end, isEnabled: true)
             } else {
                 p.loop.isEnabled.toggle()

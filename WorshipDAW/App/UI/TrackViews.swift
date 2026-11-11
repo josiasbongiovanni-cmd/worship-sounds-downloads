@@ -46,14 +46,21 @@ struct TrackHeaderView: View {
                     }
                 }
                 HStack(spacing: 4) {
-                    PillToggle(label: "M", isOn: track.isMuted, tint: Theme.mute, size: compact ? 22 : 22) {
+                    PillToggle(label: "M", isOn: track.isMuted, tint: Theme.mute, size: 22) {
                         session.updateTrack(track.id) { $0.isMuted.toggle() }
                     }
-                    PillToggle(label: "S", isOn: track.isSolo, tint: Theme.solo, size: compact ? 22 : 22) {
+                    PillToggle(label: "S", isOn: track.isSolo, tint: Theme.solo, size: 22) {
                         session.updateTrack(track.id) { $0.isSolo.toggle() }
                     }
-                    PillToggle(label: "R", isOn: track.isArmed, tint: Theme.record, size: compact ? 22 : 22) {
+                    PillToggle(label: "R", isOn: track.isArmed, tint: Theme.record, size: 22) {
                         session.updateTrack(track.id) { $0.isArmed.toggle() }
+                    }
+                    .contextMenu { TrackInputMenu(session: session, track: track) }
+                    if track.isArmed {
+                        Text(track.input.shortName)
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(Theme.record)
+                            .lineLimit(1)
                     }
                     if !compact {
                         Slider(value: Binding(
@@ -338,6 +345,52 @@ struct WaveformView: View {
                 x += step
             }
             ctx.fill(path, with: .color(tint.opacity(0.95)))
+        }
+    }
+}
+
+
+/// Menú de entrada de grabación (clic derecho en el botón de armar, como en REAPER).
+struct TrackInputMenu: View {
+    let session: Session
+    let track: Track
+
+    var body: some View {
+        let channels = max(1, session.audio.settings.inputChannelCount)
+        Section("Entrada de grabación") {
+            Button { set(.off) } label: { label("Sin entrada", .off) }
+            Menu("Mono") {
+                ForEach(0..<channels, id: \.self) { c in
+                    Button { set(.mono(c)) } label: { label(TrackInput.mono(c).displayName, .mono(c)) }
+                }
+            }
+            if channels > 1 {
+                Menu("Estéreo") {
+                    ForEach(Array(stride(from: 0, to: channels - 1, by: 2)), id: \.self) { c in
+                        Button { set(.stereo(c)) } label: { label(TrackInput.stereo(c).displayName, .stereo(c)) }
+                    }
+                }
+            }
+        }
+        Button {
+            session.updateTrack(track.id) { $0.isArmed.toggle() }
+        } label: {
+            Label(track.isArmed ? "Desarmar" : "Armar para grabar", systemImage: "record.circle")
+        }
+    }
+
+    private func set(_ input: TrackInput) {
+        session.updateTrack(track.id) { t in
+            t.input = input
+            if input != .off { t.isArmed = true }
+        }
+    }
+
+    @ViewBuilder private func label(_ text: String, _ input: TrackInput) -> some View {
+        if track.input == input {
+            Label(text, systemImage: "checkmark")
+        } else {
+            Text(text)
         }
     }
 }

@@ -27,7 +27,8 @@ enum AudioConverterService {
 
     /// Convierte cualquier archivo legible por Core Audio (wav, aiff, mp3, m4a, caf…)
     /// a un .caf en el formato del proyecto. Devuelve la duración en segundos.
-    static func convert(source: URL, destination: URL, format: AVAudioFormat) throws -> TimeInterval {
+    static func convert(source: URL, destination: URL, format: AVAudioFormat,
+                        channelMap: [Int]? = nil) throws -> TimeInterval {
         let input: AVAudioFile
         do {
             input = try AVAudioFile(forReading: source)
@@ -38,9 +39,15 @@ enum AudioConverterService {
         guard let converter = AVAudioConverter(from: inFormat, to: format) else {
             throw AudioFileError.conversionFailed("formato no soportado")
         }
-        if inFormat.channelCount == 1 && format.channelCount == 2 {
+        if let channelMap {
+            // Extraer canales concretos de una grabación multicanal (entrada de la pista).
+            let maxChannel = Int(inFormat.channelCount) - 1
+            converter.channelMap = channelMap.map { NSNumber(value: min($0, maxChannel)) }
+        } else if inFormat.channelCount == 1 && format.channelCount == 2 {
             // Mono → estéreo: duplicar el canal en ambos lados.
             converter.channelMap = [0, 0]
+        } else if inFormat.channelCount > 2 && format.channelCount == 2 {
+            converter.channelMap = [0, 1]
         }
         converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
 

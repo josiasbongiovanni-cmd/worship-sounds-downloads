@@ -13,6 +13,7 @@ struct EditorView: View {
     @State private var showImporter = false
     @State private var compactTab: CompactTab = .arrange
     @State private var inspectorSheet = false
+    @State private var showPreferences = false
     @FocusState private var editorFocused: Bool
 
     #if os(iOS)
@@ -66,6 +67,16 @@ struct EditorView: View {
         .onReceive(NotificationCenter.default.publisher(for: .worshipToggleMixer)) { _ in
             withAnimation(.snappy) { showMixer.toggle() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .worshipShowPreferences)) { _ in showPreferences = true }
+        .overlay(alignment: .bottom) { MIDILearnBanner(midi: app.midi) }
+        .sheet(isPresented: $showPreferences) {
+            NavigationStack {
+                PreferencesView(app: app)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) { Button("Listo") { showPreferences = false } }
+                    }
+            }
+        }
     }
 
     // MARK: Mac / iPad
@@ -80,7 +91,7 @@ struct EditorView: View {
                         withAnimation(.snappy) { showInspector = true }
                     })
                     if showMixer {
-                        MixerView(session: session)
+                        MixerView(session: session, midi: app.midi)
                             .frame(height: 470)
                             .overlay(alignment: .top) { Rectangle().fill(Theme.strokeStrong).frame(height: 1) }
                             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -106,7 +117,7 @@ struct EditorView: View {
                     ArrangementView(session: session, headerWidth: 128, trackHeight: 64, compact: true,
                                     onShowTrackInspector: { _ in inspectorSheet = true })
                 case .mixer:
-                    MixerView(session: session)
+                    MixerView(session: session, midi: app.midi)
                 case .live:
                     LivePadsView(session: session)
                 case .song:
@@ -160,10 +171,11 @@ struct EditorView: View {
         .overlay(alignment: .top) { Rectangle().fill(Theme.stroke).frame(height: 1) }
     }
 
-    // MARK: Atajos de teclado tipo REAPER (sin modificadores)
+    // MARK: Atajos de teclado por defecto de REAPER (teclas sin ⌘; los de ⌘ están en los menús)
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         guard press.modifiers.isEmpty || press.modifiers == .shift else { return .ignored }
+        let timeline = session.project.timeline
         switch press.key {
         case .space:
             session.togglePlay()
@@ -171,30 +183,38 @@ struct EditorView: View {
         case .home:
             session.returnToStart()
             return .handled
+        case .end:
+            session.goToEnd()
+            return .handled
         case .delete, .deleteForward:
             session.deleteSelection()
             return .handled
+        case .escape:
+            session.clearTimeSelection()
+            session.selectedClipID = nil
+            return .handled
         case .leftArrow:
-            session.seek(to: max(0, session.playhead - session.project.timeline.secondsPerBar))
+            session.seek(to: max(0, session.editCursor - timeline.secondsPerBar))
             return .handled
         case .rightArrow:
-            session.seek(to: session.playhead + session.project.timeline.secondsPerBar)
+            session.seek(to: session.editCursor + timeline.secondsPerBar)
             return .handled
         default:
             break
         }
-        switch press.characters.lowercased() {
-        case "r": session.toggleRecord()
-        case "s": session.splitAtPlayhead()
-        case "l": session.toggleLoop()
-        case "k": session.edit { $0.isClickEnabled.toggle() }
-        case "m": withAnimation(.snappy) { showMixer.toggle() }
-        case "i": withAnimation(.snappy) { showInspector.toggle() }
-        case "[": session.jumpToPreviousSection()
-        case "]": session.jumpToNextSection()
+        let ch = press.characters.lowercased()
+        if let digit = Int(ch), (1...9).contains(digit) {
+            session.goToMarker(digit)
+            return .handled
+        }
+        switch ch {
+        case "r": session.toggleLoop()            // Repetir
+        case "s": session.splitAtPlayhead()       // Dividir
+        case "m": session.insertMarker()          // Marcador
+        case "[": session.goToPreviousMarker()
+        case "]": session.goToNextMarker()
         case "+", "=": session.zoom(by: 1.4)
         case "-": session.zoom(by: 1 / 1.4)
-        case "f": session.followPlayhead.toggle()
         default: return .ignored
         }
         return .handled
@@ -204,4 +224,5 @@ struct EditorView: View {
 extension Notification.Name {
     static let worshipImportAudio = Notification.Name("worship.importAudio")
     static let worshipToggleMixer = Notification.Name("worship.toggleMixer")
+    static let worshipShowPreferences = Notification.Name("worship.showPreferences")
 }

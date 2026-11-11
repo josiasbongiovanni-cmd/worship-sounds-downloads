@@ -101,8 +101,10 @@ final class AudioEngine {
     private var configObserver: NSObjectProtocol?
 
     var onError: ((String) -> Void)?
+    let settings: AudioSettings
 
-    init(sampleRate: Double = 48_000) {
+    init(sampleRate: Double = 48_000, settings: AudioSettings) {
+        self.settings = settings
         format = AudioFormats.project(sampleRate: sampleRate)
         engine.attach(clickPlayer)
         engine.attach(clickBus)
@@ -134,14 +136,33 @@ final class AudioEngine {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default,
                                 options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
-        try? session.setPreferredSampleRate(format.sampleRate)
-        try? session.setPreferredIOBufferDuration(0.005)
         try session.setActive(true)
         #endif
         if !engine.isRunning {
+            settings.apply(to: engine)
+            if inputPrepared { settings.applyInput(to: engine) }
             engine.prepare()
             try engine.start()
         }
+    }
+
+    /// Vuelve a abrir el dispositivo con la configuración actual (Preferencias › Audio).
+    func reconfigure() {
+        let wasPlaying = isPlaying
+        let position = currentPosition
+        stop()
+        engine.stop()
+        settings.apply(to: engine)
+        if inputPrepared { settings.applyInput(to: engine) }
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: nil)
+        do {
+            engine.prepare()
+            try engine.start()
+        } catch {
+            onError?("No se pudo iniciar el dispositivo de audio: \(error.localizedDescription)")
+            return
+        }
+        if wasPlaying, let project = latestProject { play(project: project, from: position) }
     }
 
     func shutdown() {
@@ -361,6 +382,7 @@ final class AudioEngine {
         guard !inputPrepared else { return }
         stop()
         engine.stop()
+        settings.applyInput(to: engine)
         let input = engine.inputNode
         let fmt = input.outputFormat(forBus: 0)
         guard fmt.sampleRate > 0, fmt.channelCount > 0 else { throw EngineError.noInput }

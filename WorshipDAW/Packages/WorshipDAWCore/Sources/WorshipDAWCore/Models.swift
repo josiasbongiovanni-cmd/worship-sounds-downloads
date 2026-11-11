@@ -171,6 +171,48 @@ public struct ChannelEQ: Codable, Hashable, Sendable {
     public var isFlat: Bool { lowGain == 0 && midGain == 0 && highGain == 0 }
 }
 
+/// Entrada de grabación de una pista, como el menú del botón de armar en REAPER.
+public enum TrackInput: Codable, Hashable, Sendable {
+    case off
+    /// Canal de entrada (base 0) de la interfaz.
+    case mono(Int)
+    /// Par estéreo que empieza en el canal indicado (base 0): 0 = Entradas 1/2.
+    case stereo(Int)
+
+    public var displayName: String {
+        switch self {
+        case .off: "Sin entrada"
+        case .mono(let c): "Entrada \(c + 1)"
+        case .stereo(let c): "Entradas \(c + 1)/\(c + 2)"
+        }
+    }
+
+    public var shortName: String {
+        switch self {
+        case .off: "—"
+        case .mono(let c): "In \(c + 1)"
+        case .stereo(let c): "In \(c + 1)/\(c + 2)"
+        }
+    }
+
+    /// Mapa de canales para convertir la grabación multicanal a estéreo.
+    public var channelMap: [Int]? {
+        switch self {
+        case .off: nil
+        case .mono(let c): [c, c]
+        case .stereo(let c): [c, c + 1]
+        }
+    }
+
+    public var highestChannel: Int {
+        switch self {
+        case .off: -1
+        case .mono(let c): c
+        case .stereo(let c): c + 1
+        }
+    }
+}
+
 public struct Track: Identifiable, Codable, Hashable, Sendable {
     public var id: UUID
     public var name: String
@@ -183,13 +225,15 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
     public var isMuted: Bool
     public var isSolo: Bool
     public var isArmed: Bool
+    public var input: TrackInput
     public var eq: ChannelEQ
     public var inserts: [PluginRef]
     public var clips: [Clip]
 
     public init(id: UUID = UUID(), name: String, color: TrackColor = .violet, role: TrackRole = .audio,
                 volumeDB: Double = 0, pan: Double = 0, isMuted: Bool = false, isSolo: Bool = false,
-                isArmed: Bool = false, eq: ChannelEQ = ChannelEQ(), inserts: [PluginRef] = [], clips: [Clip] = []) {
+                isArmed: Bool = false, input: TrackInput = .mono(0), eq: ChannelEQ = ChannelEQ(),
+                inserts: [PluginRef] = [], clips: [Clip] = []) {
         self.id = id
         self.name = name
         self.color = color
@@ -199,12 +243,50 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
         self.isMuted = isMuted
         self.isSolo = isSolo
         self.isArmed = isArmed
+        self.input = input
         self.eq = eq
         self.inserts = inserts
         self.clips = clips
     }
 
     public var end: TimeInterval { clips.map(\.end).max() ?? 0 }
+}
+
+extension Track {
+    /// Lectura tolerante: los proyectos guardados antes de agregar un campo siguen abriendo.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        color = try c.decodeIfPresent(TrackColor.self, forKey: .color) ?? .violet
+        role = try c.decodeIfPresent(TrackRole.self, forKey: .role) ?? .audio
+        volumeDB = try c.decodeIfPresent(Double.self, forKey: .volumeDB) ?? 0
+        pan = try c.decodeIfPresent(Double.self, forKey: .pan) ?? 0
+        isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+        isSolo = try c.decodeIfPresent(Bool.self, forKey: .isSolo) ?? false
+        isArmed = try c.decodeIfPresent(Bool.self, forKey: .isArmed) ?? false
+        input = try c.decodeIfPresent(TrackInput.self, forKey: .input) ?? .mono(0)
+        eq = try c.decodeIfPresent(ChannelEQ.self, forKey: .eq) ?? ChannelEQ()
+        inserts = try c.decodeIfPresent([PluginRef].self, forKey: .inserts) ?? []
+        clips = try c.decodeIfPresent([Clip].self, forKey: .clips) ?? []
+    }
+}
+
+// MARK: - Marcadores
+
+/// Marcador numerado (tecla M en REAPER; las teclas 1–9 saltan a cada uno).
+public struct Marker: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
+    public var number: Int
+    public var name: String
+    public var time: TimeInterval
+
+    public init(id: UUID = UUID(), number: Int, name: String = "", time: TimeInterval) {
+        self.id = id
+        self.number = number
+        self.name = name
+        self.time = time
+    }
 }
 
 // MARK: - Proyecto
@@ -236,6 +318,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
     public var sampleRate: Double
     public var tracks: [Track]
     public var sections: [SongSection]
+    public var markers: [Marker]
     public var loop: LoopRegion
     public var isClickEnabled: Bool
     public var clickVolumeDB: Double
@@ -245,7 +328,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
 
     public init(id: UUID = UUID(), name: String, bpm: Double = 72, beatsPerBar: Int = 4, key: String = "G",
                 sampleRate: Double = 48_000, tracks: [Track] = [], sections: [SongSection] = [],
-                loop: LoopRegion = LoopRegion(), isClickEnabled: Bool = true, clickVolumeDB: Double = -6,
+                markers: [Marker] = [], loop: LoopRegion = LoopRegion(), isClickEnabled: Bool = true, clickVolumeDB: Double = -6,
                 masterVolumeDB: Double = 0, createdAt: Date = Date(), modifiedAt: Date = Date()) {
         self.version = Project.currentVersion
         self.id = id
@@ -256,6 +339,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         self.sampleRate = sampleRate
         self.tracks = tracks
         self.sections = sections
+        self.markers = markers
         self.loop = loop
         self.isClickEnabled = isClickEnabled
         self.clickVolumeDB = clickVolumeDB
@@ -292,6 +376,28 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
     /// Todos los archivos de audio referenciados por el proyecto.
     public var referencedAudioFiles: Set<String> {
         Set(tracks.flatMap { $0.clips.map(\.fileName) })
+    }
+}
+
+extension Project {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? Project.currentVersion
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        bpm = try c.decodeIfPresent(Double.self, forKey: .bpm) ?? 120
+        beatsPerBar = try c.decodeIfPresent(Int.self, forKey: .beatsPerBar) ?? 4
+        key = try c.decodeIfPresent(String.self, forKey: .key) ?? "C"
+        sampleRate = try c.decodeIfPresent(Double.self, forKey: .sampleRate) ?? 48_000
+        tracks = try c.decodeIfPresent([Track].self, forKey: .tracks) ?? []
+        sections = try c.decodeIfPresent([SongSection].self, forKey: .sections) ?? []
+        markers = try c.decodeIfPresent([Marker].self, forKey: .markers) ?? []
+        loop = try c.decodeIfPresent(LoopRegion.self, forKey: .loop) ?? LoopRegion()
+        isClickEnabled = try c.decodeIfPresent(Bool.self, forKey: .isClickEnabled) ?? true
+        clickVolumeDB = try c.decodeIfPresent(Double.self, forKey: .clickVolumeDB) ?? -6
+        masterVolumeDB = try c.decodeIfPresent(Double.self, forKey: .masterVolumeDB) ?? 0
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? Date()
     }
 }
 

@@ -135,6 +135,23 @@ struct ArrangementView: View {
                     }
                 }
 
+                if session.isPlaying {
+                    // Cursor de edición: adonde vuelve la reproducción al detener.
+                    Rectangle()
+                        .fill(Theme.textTertiary)
+                        .frame(width: 1, height: contentHeight)
+                        .offset(x: CGFloat(session.editCursor * pps))
+                        .allowsHitTesting(false)
+                }
+
+                ForEach(session.project.markers) { marker in
+                    Rectangle()
+                        .fill(Theme.record.opacity(0.45))
+                        .frame(width: 1, height: contentHeight)
+                        .offset(x: CGFloat(marker.time * pps))
+                        .allowsHitTesting(false)
+                }
+
                 Rectangle()
                     .fill(Theme.playhead)
                     .frame(width: 1.5, height: contentHeight)
@@ -234,6 +251,7 @@ struct TimelineHeader: View {
     let width: CGFloat
 
     @State private var renamingSection: SongSection?
+    @State private var renamingMarker: Marker?
     @State private var renameText = ""
 
     private var pps: Double { session.pixelsPerSecond }
@@ -246,18 +264,24 @@ struct TimelineHeader: View {
                 .frame(height: ArrangementView.rulerHeight)
         }
         .background(Theme.panel)
-        .alert("Renombrar sección", isPresented: Binding(
-            get: { renamingSection != nil },
-            set: { if !$0 { renamingSection = nil } })) {
+        .alert(renamingMarker != nil ? "Renombrar marcador" : "Renombrar sección", isPresented: Binding(
+            get: { renamingSection != nil || renamingMarker != nil },
+            set: { if !$0 { renamingSection = nil; renamingMarker = nil } })) {
             TextField("Nombre", text: $renameText)
-            Button("Cancelar", role: .cancel) { renamingSection = nil }
+            Button("Cancelar", role: .cancel) { renamingSection = nil; renamingMarker = nil }
             Button("Guardar") {
+                if let id = renamingMarker?.id {
+                    session.edit { p in
+                        if let i = p.markers.firstIndex(where: { $0.id == id }) { p.markers[i].name = renameText }
+                    }
+                }
                 if let id = renamingSection?.id {
                     session.edit { p in
                         if let i = p.sections.firstIndex(where: { $0.id == id }) { p.sections[i].name = renameText }
                     }
                 }
                 renamingSection = nil
+                renamingMarker = nil
             }
         }
     }
@@ -380,14 +404,52 @@ struct TimelineHeader: View {
         }
         .contentShape(Rectangle())
         .gesture(
+            // Clic: mueve el cursor. Arrastre: selección de tiempo (el loop la sigue), como en REAPER.
             DragGesture(minimumDistance: 0)
                 .onChanged { g in
-                    let t = Double(g.location.x + offsetX) / pps
-                    session.playhead = session.snap(t)
+                    guard abs(g.translation.width) > 4 else { return }
+                    let a = session.snap(Double(g.startLocation.x + offsetX) / pps)
+                    let b = session.snap(Double(g.location.x + offsetX) / pps)
+                    session.setTimeSelection(a, b)
                 }
                 .onEnded { g in
-                    session.seek(to: session.snap(Double(g.location.x + offsetX) / pps))
+                    if abs(g.translation.width) <= 4 {
+                        session.seek(to: session.snap(Double(g.location.x + offsetX) / pps))
+                    }
                 }
         )
+        .overlay(alignment: .topLeading) { markerFlags }
+    }
+
+    /// Banderas de marcadores numerados sobre la regla.
+    private var markerFlags: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear.allowsHitTesting(false)
+            ForEach(session.project.markers) { marker in
+                let x = CGFloat(marker.time * pps) - offsetX
+                if x > -40 && x < max(width, 1) + 40 {
+                    Button { session.seek(to: marker.time) } label: {
+                        Text(marker.name.isEmpty ? "\(marker.number)" : "\(marker.number) \(marker.name)")
+                            .font(.system(size: 9, weight: .heavy, design: .rounded))
+                            .lineLimit(1)
+                            .padding(.horizontal, 4)
+                            .frame(height: 13)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(Theme.record))
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: x, y: 0)
+                    .contextMenu {
+                        Button {
+                            renameText = marker.name
+                            renamingMarker = marker
+                        } label: { Label("Renombrar", systemImage: "pencil") }
+                        Button(role: .destructive) { session.edit { $0.removeMarker(marker.id) } } label: {
+                            Label("Eliminar marcador", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        }
     }
 }

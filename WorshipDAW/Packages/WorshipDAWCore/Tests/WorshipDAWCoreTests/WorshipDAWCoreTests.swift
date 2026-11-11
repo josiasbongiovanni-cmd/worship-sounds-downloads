@@ -112,3 +112,48 @@ final class StoreTests: XCTestCase {
         XCTAssertNotEqual(url, second)
     }
 }
+
+final class ReaperParityTests: XCTestCase {
+    func testMarkersNumberingAndNavigation() {
+        var p = ProjectTemplate.fullBand.makeProject(name: "M", bpm: 60)
+        p.addMarker(at: 10)
+        p.addMarker(at: 5)
+        XCTAssertEqual(p.markers.map(\.number), [2, 1])
+        p.removeMarker(p.marker(number: 1)!.id)
+        XCTAssertEqual(p.addMarker(at: 30).number, 1)
+        // Quedan los marcadores 2 (5 s) y 1 (30 s); las secciones empiezan en 0, 16, 48…
+        XCTAssertEqual(p.marker(number: 1)?.time, 30)
+        XCTAssertEqual(p.nextStop(after: 0), 5)
+        XCTAssertEqual(p.nextStop(after: 5), 16)
+        XCTAssertEqual(p.previousStop(before: 16), 5)
+    }
+
+    func testTrackInputChannelMap() {
+        XCTAssertEqual(TrackInput.mono(2).channelMap, [2, 2])
+        XCTAssertEqual(TrackInput.stereo(0).channelMap, [0, 1])
+        XCTAssertNil(TrackInput.off.channelMap)
+        var p = Project(name: "In")
+        p.addTrack(name: "A"); p.addTrack(name: "B")
+        p.tracks[0].isArmed = true; p.tracks[0].input = .mono(3)
+        p.tracks[1].isArmed = true; p.tracks[1].input = .stereo(4)
+        XCTAssertEqual(p.highestArmedInputChannel, 5)
+    }
+
+    func testDecodesProjectsSavedBeforeNewFields() throws {
+        let json = """
+        {"version":1,"id":"\(UUID().uuidString)","name":"Viejo","bpm":70,"beatsPerBar":4,"key":"D",
+         "sampleRate":48000,"sections":[],"loop":{"start":0,"end":8,"isEnabled":false},
+         "isClickEnabled":true,"clickVolumeDB":-6,"masterVolumeDB":0,
+         "createdAt":"2026-11-11T10:00:00Z","modifiedAt":"2026-11-11T10:00:00Z",
+         "tracks":[{"id":"\(UUID().uuidString)","name":"Voz","color":"violet","role":"audio","volumeDB":0,"pan":0,
+           "isMuted":false,"isSolo":false,"isArmed":false,"eq":{"lowGain":0,"midGain":0,"highGain":0,"isEnabled":true},
+           "inserts":[],"clips":[]}]}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let p = try decoder.decode(Project.self, from: Data(json.utf8))
+        XCTAssertEqual(p.name, "Viejo")
+        XCTAssertTrue(p.markers.isEmpty)
+        XCTAssertEqual(p.tracks.first?.input, .mono(0))
+    }
+}

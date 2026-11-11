@@ -11,6 +11,8 @@ final class AppModel {
     var errorMessage: String?
 
     let store: ProjectStore
+    let audioSettings = AudioSettings()
+    let midi = MIDIManager()
 
     init() {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -22,6 +24,18 @@ final class AppModel {
         #endif
         store = ProjectStore(rootURL: root)
         refresh()
+        midi.onAction = { [weak self] target, value in
+            self?.session?.handleMIDI(target, value: value)
+        }
+    }
+
+    /// Aplica cambios de Preferencias › Audio al motor abierto.
+    func applyAudioSettings() {
+        if let session {
+            session.audio.reconfigure()
+        } else {
+            audioSettings.refreshDevices()
+        }
     }
 
     func refresh() {
@@ -47,7 +61,7 @@ final class AppModel {
         do {
             let project = try ProjectStore.load(from: url)
             session?.close()
-            session = Session(project: project, url: url)
+            session = Session(project: project, url: url, audioSettings: audioSettings)
         } catch {
             errorMessage = "No se pudo abrir el proyecto: \(error.localizedDescription)"
         }

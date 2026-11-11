@@ -27,42 +27,74 @@ struct WorshipDAWApp: App {
                 }
                 .keyboardShortcut("i", modifiers: .command)
                 .disabled(app.session == nil)
-                Button("Exportar mezcla (WAV)") { app.session?.exportMix() }
-                    .keyboardShortcut("e", modifiers: .command)
+                Button("Renderizar mezcla (WAV)…") { app.session?.exportMix() }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
                     .disabled(app.session == nil)
-                Button("Guardar") { app.session?.saveNow() }
+                Button("Guardar proyecto") { app.session?.saveNow() }
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(app.session == nil)
                 Button("Cerrar proyecto") { app.closeSession() }
                     .keyboardShortcut("w", modifiers: [.command, .shift])
                     .disabled(app.session == nil)
             }
-            CommandMenu("Transporte") {
-                Button("Reproducir / Detener  (Espacio)") { app.session?.togglePlay() }
-                Button("Grabar  (R)") { app.session?.toggleRecord() }
-                Button("Volver al inicio") { app.session?.returnToStart() }
-                    .keyboardShortcut(.home, modifiers: .command)
-                Divider()
-                Button("Sección anterior  ([)") { app.session?.jumpToPreviousSection() }
-                Button("Sección siguiente  (])") { app.session?.jumpToNextSection() }
-                Button("Loop  (L)") { app.session?.toggleLoop() }
-                Button("Click  (K)") { app.session?.edit { $0.isClickEnabled.toggle() } }
-            }
-            CommandMenu("Editar clips") {
-                Button("Dividir en el cursor  (S)") { app.session?.splitAtPlayhead() }
-                Button("Duplicar") { app.session?.duplicateSelection() }
-                    .keyboardShortcut("d", modifiers: .command)
-                Button("Eliminar  (⌫)") { app.session?.deleteSelection() }
-                Divider()
-                Button("Acercar") { app.session?.zoom(by: 1.4) }
-                    .keyboardShortcut("+", modifiers: .command)
-                Button("Alejar") { app.session?.zoom(by: 1 / 1.4) }
-                    .keyboardShortcut("-", modifiers: .command)
-                Button("Mostrar mezclador  (M)") {
+            #if os(macOS)
+            // ⌘M abre el mezclador, como en REAPER (reemplaza "Minimizar").
+            CommandGroup(replacing: .windowSize) {
+                Button("Mezclador") {
                     NotificationCenter.default.post(name: .worshipToggleMixer, object: nil)
                 }
+                .keyboardShortcut("m", modifiers: .command)
+            }
+            #else
+            CommandGroup(replacing: .appSettings) {
+                Button("Preferencias…") {
+                    NotificationCenter.default.post(name: .worshipShowPreferences, object: nil)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            #endif
+            CommandMenu("Transporte") {
+                Button("Reproducir / Detener   (Espacio)") { app.session?.togglePlay() }
+                    .disabled(app.session == nil)
+                Button("Grabar") { app.session?.toggleRecord() }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(app.session == nil)
+                Button("Repetir   (R)") { app.session?.toggleLoop() }
+                    .disabled(app.session == nil)
+                Button("Metrónomo") { app.session?.edit { $0.isClickEnabled.toggle() } }
+                    .disabled(app.session == nil)
+                Divider()
+                Button("Ir al inicio   (Inicio)") { app.session?.returnToStart() }
+                Button("Ir al final   (Fin)") { app.session?.goToEnd() }
+                Button("Marcador anterior   ([)") { app.session?.goToPreviousMarker() }
+                Button("Marcador siguiente   (])") { app.session?.goToNextMarker() }
+                Button("Insertar marcador   (M)") { app.session?.insertMarker() }
+            }
+            CommandMenu("Pista") {
+                Button("Insertar pista nueva") { app.session?.addTrack() }
+                    .keyboardShortcut("t", modifiers: .command)
+                    .disabled(app.session == nil)
+                Button("Armar / desarmar pista seleccionada") {
+                    if let s = app.session, let id = s.selectedTrackID { s.updateTrack(id) { $0.isArmed.toggle() } }
+                }
+                .disabled(app.session?.selectedTrackID == nil)
+            }
+            CommandMenu("Ítem") {
+                Button("Dividir en el cursor   (S)") { app.session?.splitAtPlayhead() }
+                Button("Duplicar") { app.session?.duplicateSelection() }
+                    .keyboardShortcut("d", modifiers: .command)
+                Button("Eliminar   (⌫)") { app.session?.deleteSelection() }
+                Divider()
+                Button("Acercar   (+)") { app.session?.zoom(by: 1.4) }
+                Button("Alejar   (−)") { app.session?.zoom(by: 1 / 1.4) }
             }
         }
+
+        #if os(macOS)
+        Settings {
+            PreferencesView(app: app)
+        }
+        #endif
     }
 }
 

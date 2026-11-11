@@ -47,8 +47,8 @@ struct TransportControls: View {
         HStack(spacing: 8) {
             TransportButton(systemName: "backward.end.fill", size: size) { session.returnToStart() }
                 .help("Volver al inicio (Inicio)")
-            TransportButton(systemName: "chevron.backward.2", size: size) { session.jumpToPreviousSection() }
-                .help("Sección anterior ([)")
+            TransportButton(systemName: "chevron.backward.2", size: size) { session.goToPreviousMarker() }
+                .help("Marcador / sección anterior ([)")
             Button {
                 session.togglePlay()
             } label: {
@@ -73,17 +73,17 @@ struct TransportControls: View {
                     .shadow(color: session.isRecording ? Theme.record.opacity(0.7) : .clear, radius: 10)
             }
             .buttonStyle(.plain)
-            .help("Grabar (R)")
-            TransportButton(systemName: "chevron.forward.2", size: size) { session.jumpToNextSection() }
-                .help("Sección siguiente (])")
+            .help("Grabar (⌘R)")
+            TransportButton(systemName: "chevron.forward.2", size: size) { session.goToNextMarker() }
+                .help("Marcador / sección siguiente (])")
             TransportButton(systemName: "repeat", isActive: session.project.loop.isEnabled, tint: Theme.loop, size: size) {
                 session.toggleLoop()
             }
-            .help("Loop (L)")
+            .help("Repetir (R)")
             TransportButton(systemName: "metronome.fill", isActive: session.project.isClickEnabled, tint: Theme.solo, size: size) {
                 session.edit { $0.isClickEnabled.toggle() }
             }
-            .help("Click (K)")
+            .help("Metrónomo")
         }
     }
 }
@@ -229,14 +229,18 @@ struct TransportBar: View {
                 TransportButton(systemName: "square.and.arrow.down", size: 30, action: onImport)
                     .help("Importar audio (⌘I)")
                 exportButton
+                TransportButton(systemName: "gearshape", size: 30) {
+                    NotificationCenter.default.post(name: .worshipShowPreferences, object: nil)
+                }
+                .help("Preferencias: audio y MIDI (⌘,)")
                 TransportButton(systemName: "slider.vertical.3", isActive: showMixer, tint: Theme.accent, size: 30) {
                     withAnimation(.snappy) { showMixer.toggle() }
                 }
-                .help("Mezclador (M)")
+                .help("Mezclador (⌘M)")
                 TransportButton(systemName: "sidebar.right", isActive: showInspector, tint: Theme.accent, size: 30) {
                     withAnimation(.snappy) { showInspector.toggle() }
                 }
-                .help("Inspector (I)")
+                .help("Inspector")
             }
         }
         .padding(.horizontal, 14)
@@ -265,7 +269,7 @@ struct TransportBar: View {
             .fixedSize()
         } else {
             TransportButton(systemName: "square.and.arrow.up", size: 30) { session.exportMix() }
-                .help("Exportar mezcla WAV (⌘E)")
+                .help("Renderizar mezcla WAV (⌥⌘R)")
         }
     }
 }
@@ -301,6 +305,9 @@ struct CompactTransportBar: View {
                     if let url = session.lastExportURL {
                         ShareLink(item: url) { Label("Compartir última mezcla", systemImage: "paperplane") }
                     }
+                    Button {
+                        NotificationCenter.default.post(name: .worshipShowPreferences, object: nil)
+                    } label: { Label("Preferencias (audio y MIDI)", systemImage: "gearshape") }
                     Divider()
                     Button { session.undo() } label: { Label("Deshacer", systemImage: "arrow.uturn.backward") }
                         .disabled(!session.canUndo)

@@ -11,30 +11,40 @@ y **una sola base de código para Mac y iPhone/iPad** (SwiftUI + AVAudioEngine).
 | **Arreglo** | Línea de tiempo con regla de compases, grilla con *snap*, zoom (pinch / ⌘+ / ⌘−), seguir cursor. |
 | **Estructura** | Secciones de canción (Intro, Verso, Pre‑Coro, Coro, Puente, Interludio, Tag, Vamp, Final) con colores; clic para saltar, "Repetir esta sección" para ensayar. |
 | **Clips** | Importar (wav, aiff, mp3, m4a, caf…) desde archivo o arrastrando; mover (también entre pistas), recortar bordes, dividir (S), duplicar, eliminar. Formas de onda en caché. Varios archivos a la vez = una pista por stem. |
-| **Grabación** | Graba en las pistas armadas (R) desde micrófono o interfaz. |
+| **Grabación** | Grabación multipista: cada pista armada graba su propia entrada de la interfaz (Entrada 1, Entradas 3/4…). |
 | **Mezcla** | Fader con medidor, paneo, EQ de 3 bandas por canal, Mute/Solo/Rec, master. |
 | **Plugins** | Inserta Audio Units (AUv2 en Mac, AUv3 en Mac y iPhone) con su interfaz nativa. Los plugins **Worship Sounds** aparecen primero. El estado de cada plugin se guarda en el proyecto. |
-| **Click** | Metrónomo con acento, encendido con K. |
+| **Click** | Metrónomo con acento. |
+| **Audio y MIDI** | Preferencias como REAPER: interfaz de entrada y salida, frecuencia, buffer y latencia; controladores MIDI con *Aprender MIDI*. |
+| **Marcadores** | M inserta, 1–9 salta; selección de tiempo arrastrando en la regla. |
 | **En vivo** (iPhone) | Pads grandes por sección para navegar la canción en el ensayo o el domingo. |
 | **Exportar** | Mezcla a WAV 24‑bit / 48 kHz (render offline) y compartir. |
 
-### Atajos (estilo REAPER)
+### Atajos (los de REAPER por defecto)
 
 | Tecla | Acción |
 |---|---|
-| Espacio | Reproducir / detener |
-| R | Grabar |
-| S | Dividir en el cursor (clip seleccionado o todos los que cruza) |
-| ⌫ | Eliminar clip |
-| L | Loop on/off (si no hay loop, usa la sección actual) |
-| K | Click |
-| [ / ] | Sección anterior / siguiente |
-| ← / → | Un compás atrás / adelante |
-| Inicio | Volver al inicio |
-| M / I | Mezclador / Inspector |
+| Espacio | Reproducir / detener (vuelve al cursor de edición) |
+| ⌘R | Grabar |
+| R | Repetir (loop) |
+| S | Dividir en el cursor |
+| ⌘D / ⌫ | Duplicar / eliminar ítem |
+| ⌘T | Insertar pista |
+| M / 1–9 | Insertar marcador / ir al marcador |
+| [ / ] | Marcador o sección anterior / siguiente |
+| Inicio / Fin | Principio / final del proyecto |
+| Esc | Quitar selección de tiempo |
 | + / − | Zoom |
+| ⌘M | Mezclador |
+| ⌥⌘R | Renderizar mezcla |
+| ⌘, | Preferencias (audio y MIDI) |
 | ⌘Z / ⇧⌘Z | Deshacer / Rehacer |
-| ⌘I / ⌘E | Importar audio / Exportar mezcla |
+
+Arrastra en la regla para crear una selección de tiempo (el loop la sigue). Haz clic derecho en el
+botón **R** de una pista para elegir su entrada de grabación. Clic derecho en un canal del mezclador ›
+**Aprender MIDI** para asignar un control de tu controlador.
+
+La comparación completa con REAPER, con lo que ya está y lo que falta, está en [docs/REAPER.md](docs/REAPER.md).
 
 ## Cómo compilar
 
