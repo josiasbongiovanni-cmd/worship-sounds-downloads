@@ -66,6 +66,37 @@ enum PluginCatalog {
         }
     }
 
+    /// Instrumentos virtuales (AU de tipo MusicDevice): pianos, pads, sintes, samplers.
+    static func availableInstruments() -> [AvailablePlugin] {
+        let manager = AVAudioUnitComponentManager.shared()
+        let components = manager.components(matching: AudioComponentDescription(
+            componentType: kAudioUnitType_MusicDevice, componentSubType: 0, componentManufacturer: 0,
+            componentFlags: 0, componentFlagsMask: 0))
+        var seen = Set<String>()
+        return components.compactMap { c -> AvailablePlugin? in
+            let d = c.audioComponentDescription
+            let plugin = AvailablePlugin(name: c.name, manufacturerName: c.manufacturerName,
+                                         componentType: d.componentType, componentSubType: d.componentSubType,
+                                         componentManufacturer: d.componentManufacturer)
+            return seen.insert(plugin.id).inserted ? plugin : nil
+        }
+        .sorted { lhs, rhs in
+            if lhs.isWorshipSounds != rhs.isWorshipSounds { return lhs.isWorshipSounds }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    /// Instrumento por defecto de Apple: piano General MIDI en Mac, sampler en iPhone.
+    static var defaultInstrument: PluginRef {
+        #if os(macOS)
+        PluginRef(name: "Piano (Apple DLS)", manufacturerName: "Apple", componentType: kAudioUnitType_MusicDevice,
+                  componentSubType: kAudioUnitSubType_DLSSynth, componentManufacturer: kAudioUnitManufacturer_Apple)
+        #else
+        PluginRef(name: "Sampler (Apple)", manufacturerName: "Apple", componentType: kAudioUnitType_MusicDevice,
+                  componentSubType: kAudioUnitSubType_Sampler, componentManufacturer: kAudioUnitManufacturer_Apple)
+        #endif
+    }
+
     static func description(for ref: PluginRef) -> AudioComponentDescription {
         AudioComponentDescription(componentType: ref.componentType, componentSubType: ref.componentSubType,
                                   componentManufacturer: ref.componentManufacturer,

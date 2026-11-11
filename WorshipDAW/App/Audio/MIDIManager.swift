@@ -96,8 +96,15 @@ final class MIDIManager {
     private(set) var sources: [MIDISource] = []
     private(set) var mappings: [MIDIMapping] = []
     private(set) var lastMessage: MIDIMessage?
-    /// Si no es nil, el próximo CC/nota recibido se asigna a este destino.
-    var learning: MIDITarget?
+    private var storedLearning: MIDITarget?
+    /// Si no es nil, el próximo CC/nota recibido se asigna a este destino (y no suena en el instrumento).
+    var learning: MIDITarget? {
+        get { storedLearning }
+        set {
+            storedLearning = newValue
+            LiveMIDIRouter.shared.setLearning(newValue != nil)
+        }
+    }
     var errorMessage: String?
 
     /// Lo llama la app para aplicar una acción en la sesión abierta.
@@ -115,6 +122,7 @@ final class MIDIManager {
            let stored = try? JSONDecoder().decode([MIDIMapping].self, from: data) {
             mappings = stored
         }
+        updateRouterKeys()
         start()
     }
 
@@ -174,7 +182,14 @@ final class MIDIManager {
         saveMappings()
     }
 
+    private func updateRouterKeys() {
+        LiveMIDIRouter.shared.setMappedKeys(Set(mappings.map {
+            RawMIDI.mappingKey(kind: $0.kind, channel: $0.channel, number: $0.number)
+        }))
+    }
+
     private func saveMappings() {
+        updateRouterKeys()
         if let data = try? JSONEncoder().encode(mappings) {
             defaults.set(data, forKey: "midi.mappings")
         }
@@ -215,10 +230,18 @@ final class MIDIManager {
             var messages: [MIDIMessage] = []
             for packet in eventList.unsafeSequence() {
                 let count = Int(packet.pointee.wordCount)
+                let stamp = packet.pointee.timeStamp
+                let host = stamp != 0 ? stamp : mach_absolute_time()
                 withUnsafeBytes(of: packet.pointee.words) { raw in
                     let words = raw.bindMemory(to: UInt32.self)
                     for i in 0..<min(count, words.count) {
-                        if let m = parse(words[i]) { messages.append(m) }
+                        let w = words[i]
+                        guard (w >> 28) & 0xF == 0x2 else { continue }
+                        // Directo al instrumento de la pista armada, sin esperar al hilo principal.
+                        LiveMIDIRouter.shared.handle(RawMIDI(status: UInt8((w >> 16) & 0xFF),
+                                                             data1: UInt8((w >> 8) & 0x7F),
+                                                             data2: UInt8(w & 0x7F)), hostTime: host)
+                        if let m = parse(w) { messages.append(m) }
                     }
                 }
             }

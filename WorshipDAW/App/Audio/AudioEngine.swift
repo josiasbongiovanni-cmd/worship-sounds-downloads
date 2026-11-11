@@ -40,6 +40,9 @@ final class TrackStrip {
     let inMix = AVAudioMixerNode()
     var monitorNode: AVAudioSourceNode?
     let monitorState = MonitorState()
+    /// Instrumento virtual (pistas MIDI): entra al bus 2 del mezclador de entrada.
+    var instrument: (ref: PluginRef, unit: AVAudioUnit)?
+    var isLoadingInstrument = false
     let eq = AVAudioUnitEQ(numberOfBands: 3)
     let fader = AVAudioMixerNode()
     var inserts: [(ref: PluginRef, unit: AVAudioUnit)] = []
@@ -57,6 +60,7 @@ final class TrackStrip {
     var allNodes: [AVAudioNode] {
         var nodes = chain
         if let monitorNode { nodes.append(monitorNode) }
+        if let instrument { nodes.append(instrument.unit) }
         return nodes
     }
 
@@ -112,6 +116,10 @@ final class AudioEngine {
     private(set) var playStartPosition: TimeInterval = 0
 
     // Monitoreo de entrada
+    private let midiScheduler = MIDIPlaybackScheduler()
+    /// Pistas de instrumento que reciben lo que tocas en vivo.
+    private var liveMIDITrackIDs: [UUID] = []
+
     private var inputRing: InputRing?
     private var sinkNode: AVAudioSinkNode?
     private var monitorFormat: AVAudioFormat?
@@ -200,6 +208,7 @@ final class AudioEngine {
 
     func shutdown() {
         stop()
+        LiveMIDIRouter.shared.setTargets([])
         engine.stop()
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = nil
@@ -240,6 +249,7 @@ final class AudioEngine {
             }
             apply(track: track, audible: project.isAudible(track), to: strip)
             syncInserts(trackID: track.id)
+            syncInstrument(track: track, strip: strip)
         }
 
         clickBus.outputVolume = project.isClickEnabled ? Decibels.toLinear(project.clickVolumeDB) : 0
@@ -374,7 +384,78 @@ final class AudioEngine {
     }
 
     func pluginUnit(trackID: UUID, pluginID: UUID) -> AVAudioUnit? {
-        strips[trackID]?.inserts.first { $0.ref.id == pluginID }?.unit
+        if let instrument = strips[trackID]?.instrument, instrument.ref.id == pluginID { return instrument.unit }
+        return strips[trackID]?.inserts.first { $0.ref.id == pluginID }?.unit
+    }
+
+    // MARK: - Instrumentos (pistas MIDI)
+
+    private func syncInstrument(track: Track, strip: TrackStrip) {
+        let wanted = track.isInstrument ? track.instrument : nil
+        if strip.instrument?.ref.id == wanted?.id { return }
+        if let old = strip.instrument {
+            engine.disconnectNodeOutput(old.unit)
+            engine.detach(old.unit)
+            strip.instrument = nil
+            refreshLiveMIDITargets()
+        }
+        guard let ref = wanted, !strip.isLoadingInstrument else { return }
+        strip.isLoadingInstrument = true
+        Task { @MainActor in
+            do {
+                let unit = try await PluginCatalog.instantiate(ref)
+                // ¿Sigue siendo el instrumento elegido después de cargar?
+                if let current = latestProject?.tracks.first(where: { $0.id == track.id }),
+                   current.instrument?.id == ref.id, strips[track.id] === strip {
+                    engine.attach(unit)
+                    engine.connect(unit, to: strip.inMix, fromBus: 0, toBus: 2, format: format)
+                    strip.instrument = (ref, unit)
+                    refreshLiveMIDITargets()
+                }
+            } catch {
+                onError?(error.localizedDescription)
+            }
+            strip.isLoadingInstrument = false
+            guard strips[track.id] === strip else { return }
+            // Si mientras cargaba se eligió otro instrumento, cargar ese (sin reintentar uno que falló).
+            if let current = latestProject?.tracks.first(where: { $0.id == track.id }),
+               current.instrument?.id != ref.id {
+                syncInstrument(track: current, strip: strip)
+            }
+        }
+    }
+
+    /// Qué pistas de instrumento suenan con tu teclado: las armadas o, si no hay, la seleccionada.
+    func setLiveMIDITracks(_ ids: [UUID]) {
+        liveMIDITrackIDs = ids
+        refreshLiveMIDITargets()
+    }
+
+    private func refreshLiveMIDITargets() {
+        let blocks = liveMIDITrackIDs.compactMap { strips[$0]?.instrument?.unit.auAudioUnit.scheduleMIDIEventBlock }
+        LiveMIDIRouter.shared.setTargets(blocks)
+    }
+
+    private func midiEvents(project: Project, from position: TimeInterval) -> [MIDIPlaybackScheduler.Event] {
+        var events: [MIDIPlaybackScheduler.Event] = []
+        for track in project.tracks where track.isInstrument {
+            guard let block = strips[track.id]?.instrument?.unit.auAudioUnit.scheduleMIDIEventBlock else { continue }
+            for clip in track.midiClips where clip.end > position {
+                for e in MIDIRecording.playbackEvents(for: clip, from: position) {
+                    events.append(.init(time: e.time, message: RawMIDI(status: e.status, data1: e.data1, data2: e.data2),
+                                        target: block))
+                }
+            }
+        }
+        return events
+    }
+
+    /// Latencia de salida: se descuenta al grabar MIDI (tocas sobre lo que escuchas).
+    var outputLatency: TimeInterval { engine.outputNode.presentationLatency }
+
+    /// Convierte una hora del reloj (host time) en posición de la línea de tiempo de la última reproducción.
+    func timelinePosition(forHostTime host: UInt64) -> TimeInterval {
+        playStartPosition + AVAudioTime.seconds(forHostTime: host) - AVAudioTime.seconds(forHostTime: playStartHostTime)
     }
 
     /// Captura el estado actual de todos los plugins cargados para guardarlo en el proyecto.
@@ -415,11 +496,15 @@ final class AudioEngine {
         playStartPosition = position
         playStartHostTime = startHost
         isPlaying = true
+        midiScheduler.start(events: midiEvents(project: project, from: position), startHostTime: startHost,
+                            playFrom: position, sampleRate: format.sampleRate)
+        refreshLiveMIDITargets()
         updateMonitoring()
     }
 
     func stop() {
         if isPlaying { startPosition = currentPosition }
+        midiScheduler.stop()
         stopPlayers()
         isPlaying = false
         updateMonitoring()
@@ -570,6 +655,8 @@ final class AudioEngine {
         }
         schedule(project: project, from: 0, includeClick: false)
         for strip in strips.values { strip.player.play() }
+        let midi = midiEvents(project: project, from: 0).sorted { $0.time < $1.time }
+        var midiIndex = 0
 
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -591,6 +678,15 @@ final class AudioEngine {
         while engine.manualRenderingSampleTime < totalFrames {
             let remaining = totalFrames - engine.manualRenderingSampleTime
             let frames = AVAudioFrameCount(min(AVAudioFramePosition(buffer.frameCapacity), remaining))
+            // Notas MIDI que caen en este bloque, con su desplazamiento en muestras.
+            let blockStart = Double(engine.manualRenderingSampleTime) / format.sampleRate
+            let blockEnd = blockStart + Double(frames) / format.sampleRate
+            while midiIndex < midi.count, midi[midiIndex].time < blockEnd {
+                let e = midi[midiIndex]
+                let offset = AUEventSampleTime(max(0, e.time - blockStart) * format.sampleRate)
+                e.message.send(to: e.target, at: AUEventSampleTimeImmediate + offset)
+                midiIndex += 1
+            }
             let status = try engine.renderOffline(frames, to: buffer)
             switch status {
             case .success:

@@ -68,6 +68,7 @@ struct EditorView: View {
             withAnimation(.snappy) { showMixer.toggle() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .worshipShowPreferences)) { _ in showPreferences = true }
+        .onChange(of: session.selectedTrackID) { _, _ in session.refreshLiveMIDI() }
         .overlay(alignment: .bottom) { MIDILearnBanner(midi: app.midi) }
         .sheet(isPresented: $showPreferences) {
             NavigationStack {

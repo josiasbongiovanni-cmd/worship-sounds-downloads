@@ -26,6 +26,11 @@ struct TrackHeaderView: View {
                 .shadow(color: track.color.color.opacity(0.7), radius: isSelected ? 6 : 0)
             VStack(alignment: .leading, spacing: compact ? 5 : 7) {
                 HStack(spacing: 6) {
+                    if track.isInstrument {
+                        Image(systemName: "pianokeys")
+                            .font(.system(size: 10))
+                            .foregroundStyle(track.color.color)
+                    }
                     if track.role == .guide {
                         Image(systemName: "person.wave.2.fill")
                             .font(.system(size: 10))
@@ -63,7 +68,7 @@ struct TrackHeaderView: View {
                             .help("Monitoreo: \(track.monitor.displayName)")
                     }
                     if track.isArmed {
-                        Text(track.input.shortName)
+                        Text(track.isInstrument ? "MIDI" : track.input.shortName)
                             .font(.system(size: 9, weight: .bold, design: .rounded))
                             .foregroundStyle(Theme.record)
                             .lineLimit(1)
@@ -144,6 +149,11 @@ struct TrackLaneView: View {
                     session.selectedClipID = nil
                     session.seek(to: session.snap(Double(location.x) / session.pixelsPerSecond))
                 }
+            ForEach(track.midiClips) { clip in
+                if clip.end >= visibleStart - 1 && clip.start <= visibleEnd + 1 {
+                    MIDIClipView(session: session, clip: clip, track: track, trackIndex: trackIndex, trackHeight: trackHeight)
+                }
+            }
             ForEach(track.clips) { clip in
                 if clip.end >= visibleStart - 1 && clip.start <= visibleEnd + 1 {
                     ClipView(session: session, clip: clip, track: track, trackIndex: trackIndex,
@@ -362,6 +372,21 @@ struct TrackInputMenu: View {
     let track: Track
 
     var body: some View {
+        if track.isInstrument {
+            Section("Entrada de grabación") {
+                Label("MIDI: todos los controladores", systemImage: "pianokeys")
+            }
+            Button {
+                session.updateTrack(track.id) { $0.isArmed.toggle() }
+            } label: {
+                Label(track.isArmed ? "Desarmar" : "Armar para grabar MIDI", systemImage: "record.circle")
+            }
+        } else {
+            audioMenu
+        }
+    }
+
+    @ViewBuilder private var audioMenu: some View {
         let channels = max(1, session.audio.settings.inputChannelCount)
         Section("Entrada de grabación") {
             Button { set(.off) } label: { label("Sin entrada", .off) }
@@ -407,5 +432,108 @@ struct TrackInputMenu: View {
         } else {
             Text(text)
         }
+    }
+}
+
+
+// MARK: - Ítem MIDI
+
+struct MIDIClipView: View {
+    @Bindable var session: Session
+    let clip: MIDIClip
+    let track: Track
+    let trackIndex: Int
+    let trackHeight: CGFloat
+
+    @State private var moveDelta: Double = 0
+    @State private var laneDelta = 0
+    @State private var isDragging = false
+
+    private var isSelected: Bool { session.selectedClipID == clip.id }
+    private var pps: Double { session.pixelsPerSecond }
+
+    private var canDirectDrag: Bool {
+        #if os(macOS)
+        true
+        #else
+        isSelected
+        #endif
+    }
+
+    var body: some View {
+        let width = max(3, CGFloat(clip.duration * pps))
+        let height = trackHeight - 8
+        let tint = track.color.color
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tint.opacity(isSelected ? 0.34 : 0.18))
+            // Mini piano roll
+            Canvas { ctx, size in
+                let range = clip.pitchRange
+                let rows = CGFloat(range.upperBound - range.lowerBound + 1)
+                let rowH = max(1.5, (size.height - 20) / rows)
+                for n in clip.notes {
+                    let x = CGFloat(n.start * pps)
+                    guard x < size.width else { continue }
+                    let w = max(2, min(CGFloat(n.duration * pps), size.width - x))
+                    let y = 16 + CGFloat(range.upperBound - n.pitch) * rowH
+                    ctx.fill(Path(roundedRect: CGRect(x: x, y: y, width: w, height: max(1.5, rowH - 0.5)), cornerRadius: 1),
+                             with: .color(tint.opacity(0.4 + 0.6 * Double(n.velocity) / 127)))
+                }
+            }
+            .allowsHitTesting(false)
+            HStack(spacing: 4) {
+                Image(systemName: "pianokeys").font(.system(size: 8, weight: .bold))
+                Text(clip.name).font(.system(size: 10, weight: .semibold, design: .rounded)).lineLimit(1)
+            }
+            .foregroundStyle(Color.white.opacity(0.9))
+            .padding(.horizontal, 6)
+            .padding(.top, 3)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(isSelected ? Color.white.opacity(0.9) : tint.opacity(0.55), lineWidth: isSelected ? 1.5 : 1)
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            session.selectedClipID = clip.id
+            session.selectedTrackID = track.id
+        }
+        .gesture(canDirectDrag ? moveGesture : nil)
+        .contextMenu {
+            Button { session.selectedClipID = clip.id; session.duplicateSelection() } label: {
+                Label("Duplicar", systemImage: "plus.square.on.square")
+            }
+            Divider()
+            Button(role: .destructive) { session.selectedClipID = clip.id; session.deleteSelection() } label: {
+                Label("Eliminar", systemImage: "trash")
+            }
+        }
+        .offset(x: CGFloat((clip.start + moveDelta) * pps), y: 4 + CGFloat(laneDelta) * trackHeight)
+        .zIndex(isDragging ? 10 : 0)
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
+            .onChanged { g in
+                if !isDragging {
+                    isDragging = true
+                    session.selectedClipID = clip.id
+                    session.selectedTrackID = track.id
+                }
+                moveDelta = session.snap(clip.start + Double(g.translation.width) / pps) - clip.start
+                let maxIndex = session.project.tracks.count - 1
+                laneDelta = min(maxIndex, max(0, trackIndex + Int((g.translation.height / trackHeight).rounded()))) - trackIndex
+            }
+            .onEnded { _ in
+                let tracks = session.project.tracks
+                let target = trackIndex + laneDelta
+                let targetID = tracks.indices.contains(target) ? tracks[target].id : track.id
+                let newStart = clip.start + moveDelta
+                session.edit { $0.moveMIDIClip(clip.id, to: newStart, trackID: targetID) }
+                moveDelta = 0
+                laneDelta = 0
+                isDragging = false
+            }
     }
 }

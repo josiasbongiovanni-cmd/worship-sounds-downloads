@@ -81,7 +81,13 @@ y tamaño de buffer, y ves la latencia resultante. Lo mismo aquí:
   Paneo, Mute, Solo o Armar, y mueve el control. El transporte (reproducir, grabar, repetir,
   marcadores, inicio) se aprende en Preferencias › MIDI. Las asignaciones se guardan en la app.
 - ⏳ Superficies de control Mackie Control / HUI (faders motorizados) y OSC.
-- ⏳ Pistas MIDI, piano roll e instrumentos virtuales.
+- ✅ Pistas de instrumento (MIDI) con cualquier instrumento AU (pianos, pads, sintes, samplers). Por defecto, el
+  piano General MIDI de Apple en Mac y el sampler de Apple en iPhone. Insertar con ⇧⌘T o el menú "+ Pista".
+- ✅ Tocar en vivo: el teclado suena en las pistas de instrumento armadas (o en la seleccionada si no hay ninguna armada),
+  directo desde el hilo de CoreMIDI para mínima latencia. Notas, sustain, pitch bend y CC pasan al instrumento.
+- ✅ Grabar MIDI (⌘R) en las pistas de instrumento armadas, compensando la latencia de salida, y reproducirlo
+  sincronizado con el audio; también se incluye al renderizar.
+- ⏳ Editor piano roll (mover, alargar y dibujar notas), cuantizar.
 
 ## 4. Plugins: que tus plugins abran igual que en REAPER
 
@@ -103,5 +109,5 @@ REAPER carga VST, VST3, AU y CLAP. Worship DAW usa **Audio Units**, el formato n
 3. Envolventes de automatización (volumen, paneo, parámetros de plugins), con escritura por MIDI.
 4. Carpetas, sends y buses (click y guía a salidas separadas para in-ears).
 5. Mackie Control / HUI para controladores con faders motorizados.
-6. Pistas MIDI con instrumentos AU.
+6. ~~Pistas MIDI con instrumentos AU.~~ ✅ (falta el editor piano roll)
 7. Editor de acciones y atajos personalizables (como la lista de acciones de REAPER, F4).

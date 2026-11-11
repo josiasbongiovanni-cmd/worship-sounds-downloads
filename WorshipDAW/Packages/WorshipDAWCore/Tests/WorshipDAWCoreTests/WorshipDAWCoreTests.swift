@@ -181,3 +181,43 @@ final class ReaperParityTests: XCTestCase {
         XCTAssertEqual(b.fileOffset, 0, accuracy: 1e-9)
     }
 }
+
+
+final class MIDITests: XCTestCase {
+    func testRecordedEventsBecomeNotes() {
+        let ev: [TimedMIDIEvent] = [
+            .init(time: -0.5, status: 0x90, data1: 60, data2: 100),   // empezó en la cuenta previa
+            .init(time: 0.2, status: 0x80, data1: 60, data2: 0),
+            .init(time: 1.0, status: 0x90, data1: 64, data2: 90),
+            .init(time: 1.5, status: 0x90, data1: 64, data2: 0),      // note on con velocidad 0 = off
+            .init(time: 2.0, status: 0x91, data1: 67, data2: 80),     // canal 2, queda sonando
+        ]
+        let notes = MIDIRecording.notes(from: ev, start: 0, end: 3)
+        XCTAssertEqual(notes.count, 3)
+        XCTAssertEqual(notes[0].pitch, 60)
+        XCTAssertEqual(notes[0].start, 0, accuracy: 1e-9)
+        XCTAssertEqual(notes[0].duration, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(notes[1].duration, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(notes[2].channel, 2)
+        XCTAssertEqual(notes[2].duration, 1.0, accuracy: 1e-9)
+    }
+
+    func testPlaybackEventsAndClipOps() {
+        var p = Project(name: "MIDI")
+        let keys = p.addTrack(name: "Keys", role: .instrument)
+        let clip = MIDIClip(name: "Pad", start: 4, duration: 2,
+                            notes: [MIDINote(pitch: 60, velocity: 100, start: 0, duration: 1),
+                                    MIDINote(pitch: 64, velocity: 100, start: 1.5, duration: 1)])
+        p.addMIDIClip(clip, toTrack: keys.id)
+        let ev = MIDIRecording.playbackEvents(for: p.tracks[0].midiClips[0], from: 0)
+        XCTAssertEqual(ev.count, 4)
+        XCTAssertEqual(ev.last?.time ?? 0, 6, accuracy: 1e-9)   // la segunda nota se corta al final del ítem
+        XCTAssertEqual(MIDIRecording.playbackEvents(for: clip, from: 5).count, 2)
+        XCTAssertEqual(p.contentEnd, 6, accuracy: 1e-9)
+        let dup = p.duplicateMIDIClip(clip.id)
+        XCTAssertNotNil(dup)
+        XCTAssertEqual(p.tracks[0].midiClips.count, 2)
+        p.removeMIDIClip(clip.id)
+        XCTAssertEqual(p.tracks[0].midiClips.first?.start, 6)
+    }
+}

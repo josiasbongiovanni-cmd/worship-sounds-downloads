@@ -74,6 +74,9 @@ struct WorshipDAWApp: App {
                 Button("Insertar pista nueva") { app.session?.addTrack() }
                     .keyboardShortcut("t", modifiers: .command)
                     .disabled(app.session == nil)
+                Button("Insertar pista de instrumento (MIDI)") { app.session?.addTrack(role: .instrument) }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                    .disabled(app.session == nil)
                 Button("Armar / desarmar pista seleccionada") {
                     if let s = app.session, let id = s.selectedTrackID { s.updateTrack(id) { $0.isArmed.toggle() } }
                 }

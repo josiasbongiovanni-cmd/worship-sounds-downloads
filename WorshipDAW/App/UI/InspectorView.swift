@@ -64,7 +64,13 @@ struct TrackInspector: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     label("Tipo")
-                    Picker("Tipo", selection: Binding(get: { track.role }, set: { r in session.updateTrack(id) { $0.role = r } })) {
+                    Picker("Tipo", selection: Binding(get: { track.role }, set: { r in
+                        session.updateTrack(id) { t in
+                            t.role = r
+                            if r == .instrument && t.instrument == nil { t.instrument = PluginCatalog.defaultInstrument }
+                        }
+                        session.refreshLiveMIDI()
+                    })) {
                         ForEach(TrackRole.allCases, id: \.self) { Text($0.displayName).tag($0) }
                     }
                     .pickerStyle(.segmented)

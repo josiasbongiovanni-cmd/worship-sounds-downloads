@@ -56,6 +56,7 @@ struct ArrangementView: View {
         HStack(spacing: 6) {
             Menu {
                 Button { session.addTrack() } label: { Label("Pista de audio", systemImage: "waveform") }
+                Button { session.addTrack(role: .instrument) } label: { Label("Pista de instrumento (MIDI)", systemImage: "pianokeys") }
                 Button { session.addTrack(role: .guide) } label: { Label("Pista guía", systemImage: "person.wave.2") }
             } label: {
                 Label("Pista", systemImage: "plus")

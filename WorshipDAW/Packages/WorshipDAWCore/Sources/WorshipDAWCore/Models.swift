@@ -146,11 +146,14 @@ public enum TrackRole: String, Codable, CaseIterable, Sendable {
     case audio
     /// Pista de guía hablada ("Verso… Coro…") para el equipo de alabanza.
     case guide
+    /// Pista MIDI con un instrumento virtual (AU), como una pista con VSTi en REAPER.
+    case instrument
 
     public var displayName: String {
         switch self {
         case .audio: "Audio"
         case .guide: "Guía"
+        case .instrument: "Instrumento (MIDI)"
         }
     }
 }
@@ -257,13 +260,17 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
     public var monitor: MonitorMode
     public var eq: ChannelEQ
     public var inserts: [PluginRef]
+    /// Instrumento virtual de una pista `.instrument` (primer slot de FX en REAPER).
+    public var instrument: PluginRef?
+    public var midiClips: [MIDIClip]
     public var clips: [Clip]
 
     public init(id: UUID = UUID(), name: String, color: TrackColor = .violet, role: TrackRole = .audio,
                 volumeDB: Double = 0, pan: Double = 0, isMuted: Bool = false, isSolo: Bool = false,
                 isArmed: Bool = false, input: TrackInput = .mono(0), monitor: MonitorMode = .off,
                 eq: ChannelEQ = ChannelEQ(),
-                inserts: [PluginRef] = [], clips: [Clip] = []) {
+                inserts: [PluginRef] = [], clips: [Clip] = [], instrument: PluginRef? = nil,
+                midiClips: [MIDIClip] = []) {
         self.id = id
         self.name = name
         self.color = color
@@ -277,10 +284,16 @@ public struct Track: Identifiable, Codable, Hashable, Sendable {
         self.monitor = monitor
         self.eq = eq
         self.inserts = inserts
+        self.instrument = instrument
+        self.midiClips = midiClips
         self.clips = clips
     }
 
-    public var end: TimeInterval { clips.map(\.end).max() ?? 0 }
+    public var end: TimeInterval {
+        max(clips.map(\.end).max() ?? 0, midiClips.map(\.end).max() ?? 0)
+    }
+
+    public var isInstrument: Bool { role == .instrument }
 }
 
 extension Track {
@@ -301,6 +314,8 @@ extension Track {
         eq = try c.decodeIfPresent(ChannelEQ.self, forKey: .eq) ?? ChannelEQ()
         inserts = try c.decodeIfPresent([PluginRef].self, forKey: .inserts) ?? []
         clips = try c.decodeIfPresent([Clip].self, forKey: .clips) ?? []
+        instrument = try c.decodeIfPresent(PluginRef.self, forKey: .instrument)
+        midiClips = try c.decodeIfPresent([MIDIClip].self, forKey: .midiClips) ?? []
     }
 }
 

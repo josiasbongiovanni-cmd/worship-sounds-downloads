@@ -40,7 +40,7 @@ final class Session {
     @ObservationIgnored private var redoStack: [Project] = []
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
-    @ObservationIgnored private var recording: (url: URL, start: TimeInterval, trackIDs: [UUID])?
+    @ObservationIgnored private var recording: (url: URL?, start: TimeInterval, audio: [UUID], midi: [UUID])?
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
@@ -54,6 +54,7 @@ final class Session {
         waveforms.onLoaded = { [weak self] in self?.waveformRevision += 1 }
         audio.sync(project: project, projectURL: url)
         do { try audio.start() } catch { errorMessage = error.localizedDescription }
+        refreshLiveMIDI()
     }
 
     func close() {
@@ -81,7 +82,18 @@ final class Session {
     private func setProject(_ newValue: Project) {
         project = newValue
         audio.sync(project: newValue, projectURL: url)
+        refreshLiveMIDI()
         scheduleSave()
+    }
+
+    /// Pistas de instrumento que suenan con tu teclado MIDI: las armadas o, si no hay, la seleccionada.
+    func refreshLiveMIDI() {
+        var ids = project.tracks.filter { $0.isInstrument && $0.isArmed }.map(\.id)
+        if ids.isEmpty, let selected = selectedTrackID,
+           let i = project.trackIndex(selected), project.tracks[i].isInstrument {
+            ids = [selected]
+        }
+        audio.setLiveMIDITracks(ids)
     }
 
     /// Registra un punto de deshacer antes de un gesto continuo.
@@ -210,33 +222,39 @@ final class Session {
 
     func startRecording() {
         Task {
-            guard await AVAudioApplication.requestRecordPermission() else {
-                errorMessage = "Activa el permiso de micrófono para grabar."
-                return
-            }
             if isPlaying { stop() }
-            var targets = project.tracks.filter { $0.isArmed && $0.input != .off }.map(\.id)
-            if targets.isEmpty {
-                if let selected = selectedTrackID, project.trackIndex(selected) != nil {
-                    targets = [selected]
+            var audioTargets = project.tracks.filter { $0.isArmed && !$0.isInstrument && $0.input != .off }.map(\.id)
+            var midiTargets = project.tracks.filter { $0.isArmed && $0.isInstrument }.map(\.id)
+            if audioTargets.isEmpty && midiTargets.isEmpty {
+                // Nada armado: grabar en la pista seleccionada (o en una nueva).
+                if let selected = selectedTrackID, let i = project.trackIndex(selected) {
+                    if project.tracks[i].isInstrument { midiTargets = [selected] } else { audioTargets = [selected] }
                 } else {
                     var newID: UUID?
                     edit { newID = $0.addTrack(name: "Grabación").id }
-                    if let newID { targets = [newID] }
+                    if let newID { audioTargets = [newID] }
                 }
                 edit { p in
-                    for id in targets { if let i = p.trackIndex(id) { p.tracks[i].isArmed = true } }
+                    for id in audioTargets + midiTargets { if let i = p.trackIndex(id) { p.tracks[i].isArmed = true } }
                 }
             }
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("rec-\(UUID().uuidString).caf")
-            do {
-                try audio.startRecording(to: tempURL)
-            } catch {
-                errorMessage = error.localizedDescription
-                return
+            var tempURL: URL?
+            if !audioTargets.isEmpty {
+                guard await AVAudioApplication.requestRecordPermission() else {
+                    errorMessage = "Activa el permiso de micrófono para grabar."
+                    return
+                }
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("rec-\(UUID().uuidString).caf")
+                do {
+                    try audio.startRecording(to: url)
+                } catch {
+                    errorMessage = error.localizedDescription
+                    return
+                }
+                tempURL = url
             }
-            recording = (tempURL, editCursor, targets)
+            if !midiTargets.isEmpty { LiveMIDIRouter.shared.beginRecording() }
+            recording = (tempURL, editCursor, audioTargets, midiTargets)
             isRecording = true
             // Cuenta previa: arrancar N compases antes (solo suena el click y lo ya grabado).
             let countIn = Double(audio.settings.countInBars) * project.timeline.secondsPerBar
@@ -247,23 +265,46 @@ final class Session {
     private func finishRecording() {
         guard let info = recording else { return }
         recording = nil
+        let stopPosition = audio.currentPosition
+        let takeNumber = project.tracks.flatMap(\.clips).filter { $0.name.contains("Toma") }.count
+            + project.tracks.flatMap(\.midiClips).count + 1
+
+        // MIDI: lo tocado en el controlador, compensando la latencia de salida.
+        if !info.midi.isEmpty {
+            let latency = audio.outputLatency
+            let events = LiveMIDIRouter.shared.endRecording().map { e in
+                TimedMIDIEvent(time: audio.timelinePosition(forHostTime: e.host) - latency,
+                               status: e.message.status, data1: e.message.data1, data2: e.message.data2)
+            }
+            let notes = MIDIRecording.notes(from: events, start: info.start, end: stopPosition)
+            if !notes.isEmpty {
+                let length = max(notes.map(\.end).max() ?? 0, stopPosition - info.start)
+                edit { p in
+                    for id in info.midi {
+                        guard let i = p.trackIndex(id) else { continue }
+                        p.addMIDIClip(MIDIClip(name: "\(p.tracks[i].name) · Toma \(takeNumber)", start: info.start,
+                                               duration: length, notes: notes), toTrack: id)
+                    }
+                }
+            }
+        }
+
         let result = audio.stopRecording()
         isRecording = false
-        guard result.wroteAudio else { return }
+        guard result.wroteAudio, let url = info.url else { return }
         // Colocar la toma donde realmente se tocó: compensa la latencia y descarta la cuenta previa.
         let placement = RecordingAlignment.compute(playFrom: result.playFrom, editCursor: info.start,
                                                    captureDelay: result.captureDelay, latency: result.latency)
-        let takeNumber = project.tracks.flatMap(\.clips).filter { $0.name.contains("Toma") }.count + 1
         // Cada pista toma sus canales de la grabación multicanal (Entrada 1, Entradas 3/4…).
         var byInput: [[Int]: [UUID]] = [:]
-        for id in info.trackIDs {
+        for id in info.audio {
             guard let i = project.trackIndex(id), let map = project.tracks[i].input.channelMap else { continue }
             byInput[map, default: []].append(id)
         }
         Task {
             for (map, ids) in byInput {
                 do {
-                    let (fileName, duration) = try await ingest(source: info.url, channelMap: map)
+                    let (fileName, duration) = try await ingest(source: url, channelMap: map)
                     let audible = duration - placement.fileOffset
                     guard audible > 0.01 else { continue }
                     edit { p in
@@ -278,7 +319,7 @@ final class Session {
                     errorMessage = error.localizedDescription
                 }
             }
-            try? FileManager.default.removeItem(at: info.url)
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
@@ -366,9 +407,20 @@ final class Session {
 
     func addTrack(role: TrackRole = .audio) {
         edit { p in
-            let track = p.addTrack(name: role == .guide ? "Guía" : "Audio \(p.tracks.count + 1)", role: role)
+            let name: String
+            switch role {
+            case .guide: name = "Guía"
+            case .instrument: name = "Instrumento \(p.tracks.filter(\.isInstrument).count + 1)"
+            case .audio: name = "Audio \(p.tracks.count + 1)"
+            }
+            let track = p.addTrack(name: name, role: role)
+            if role == .instrument, let i = p.trackIndex(track.id) {
+                p.tracks[i].instrument = PluginCatalog.defaultInstrument
+                p.tracks[i].input = .off
+            }
             self.selectedTrackID = track.id
         }
+        refreshLiveMIDI()
     }
 
     func removeTrack(_ id: UUID) {
@@ -399,7 +451,9 @@ final class Session {
 
     func deleteSelection() {
         if let id = selectedClipID {
-            edit { $0.removeClip(id) }
+            edit { p in
+                if p.midiClipLocation(id) != nil { p.removeMIDIClip(id) } else { p.removeClip(id) }
+            }
             selectedClipID = nil
         }
     }
@@ -407,7 +461,9 @@ final class Session {
     func duplicateSelection() {
         guard let id = selectedClipID else { return }
         var newID: UUID?
-        edit { newID = $0.duplicateClip(id) }
+        edit { p in
+            newID = p.midiClipLocation(id) != nil ? p.duplicateMIDIClip(id) : p.duplicateClip(id)
+        }
         if let newID { selectedClipID = newID }
     }
 

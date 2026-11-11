@@ -5,6 +5,7 @@ struct MixerView: View {
     @Bindable var session: Session
     let midi: MIDIManager
     @State private var pluginTarget: UUID?
+    @State private var instrumentTarget: UUID?
     @State private var editingPlugin: PluginEditorTarget?
 
     var body: some View {
@@ -12,6 +13,7 @@ struct MixerView: View {
             HStack(spacing: 8) {
                 ForEach(session.project.tracks) { track in
                     ChannelStrip(session: session, track: track, midi: midi,
+                                 onChooseInstrument: { instrumentTarget = track.id },
                                  onAddPlugin: { pluginTarget = track.id },
                                  onOpenPlugin: { ref in editingPlugin = PluginEditorTarget(trackID: track.id, plugin: ref) })
                 }
@@ -25,6 +27,12 @@ struct MixerView: View {
             PluginBrowser { plugin in
                 session.updateTrack(target.id) { $0.inserts.append(plugin.makeRef()) }
                 pluginTarget = nil
+            }
+        }
+        .sheet(item: Binding(get: { instrumentTarget.map(IdentifiedUUID.init) }, set: { instrumentTarget = $0?.id })) { target in
+            PluginBrowser(kind: .instruments) { plugin in
+                session.updateTrack(target.id) { $0.instrument = plugin.makeRef() }
+                instrumentTarget = nil
             }
         }
         .sheet(item: $editingPlugin) { target in
@@ -47,6 +55,7 @@ struct ChannelStrip: View {
     @Bindable var session: Session
     let track: Track
     let midi: MIDIManager
+    var onChooseInstrument: () -> Void = {}
     var onAddPlugin: () -> Void
     var onOpenPlugin: (PluginRef) -> Void
 
@@ -62,6 +71,30 @@ struct ChannelStrip: View {
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .foregroundStyle(Theme.textPrimary)
+            }
+
+            // Instrumento (pistas MIDI): primer slot, como el VSTi en REAPER
+            if track.isInstrument {
+                Button {
+                    if let ref = track.instrument { onOpenPlugin(ref) } else { onChooseInstrument() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "pianokeys").font(.system(size: 9, weight: .bold))
+                        Text(track.instrument?.name ?? "Elegir instrumento")
+                            .font(.system(size: 9.5, weight: .bold))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(track.color.color.opacity(0.3)))
+                    .foregroundStyle(Theme.textPrimary)
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button("Cambiar instrumento…") { onChooseInstrument() }
+                    if let ref = track.instrument { Button("Abrir interfaz") { onOpenPlugin(ref) } }
+                }
             }
 
             // Inserts
@@ -253,6 +286,8 @@ struct MasterStrip: View {
 // MARK: - Navegador de plugins
 
 struct PluginBrowser: View {
+    enum Kind { case effects, instruments }
+    var kind: Kind = .effects
     var onPick: (AvailablePlugin) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var plugins: [AvailablePlugin] = []
@@ -276,16 +311,16 @@ struct PluginBrowser: View {
                     }
                 }
                 let others = filtered.filter { !$0.isWorshipSounds }
-                Section("Audio Units") {
+                Section(kind == .instruments ? "Instrumentos (AU)" : "Audio Units") {
                     ForEach(others) { row($0) }
                     if loaded && others.isEmpty {
-                        Text("No se encontraron plugins de efecto.")
+                        Text(kind == .instruments ? "No se encontraron instrumentos." : "No se encontraron plugins de efecto.")
                             .foregroundStyle(.secondary)
                     }
                 }
             }
-            .searchable(text: $query, prompt: "Buscar plugin")
-            .navigationTitle("Agregar plugin")
+            .searchable(text: $query, prompt: kind == .instruments ? "Buscar instrumento" : "Buscar plugin")
+            .navigationTitle(kind == .instruments ? "Elegir instrumento" : "Agregar plugin")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cerrar") { dismiss() }
@@ -294,7 +329,7 @@ struct PluginBrowser: View {
         }
         .macSheetFrame(width: 420, height: 480)
         .task {
-            plugins = PluginCatalog.availableEffects()
+            plugins = kind == .instruments ? PluginCatalog.availableInstruments() : PluginCatalog.availableEffects()
             loaded = true
         }
     }
