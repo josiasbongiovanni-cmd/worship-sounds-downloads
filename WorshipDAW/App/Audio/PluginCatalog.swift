@@ -1,5 +1,6 @@
 import AVFoundation
 import AudioToolbox
+import CoreAudioKit
 import WorshipDAWCore
 
 #if os(macOS)
