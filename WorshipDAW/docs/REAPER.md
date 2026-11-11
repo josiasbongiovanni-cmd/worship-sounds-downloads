@@ -87,7 +87,12 @@ y tamaño de buffer, y ves la latencia resultante. Lo mismo aquí:
   directo desde el hilo de CoreMIDI para mínima latencia. Notas, sustain, pitch bend y CC pasan al instrumento.
 - ✅ Grabar MIDI (⌘R) en las pistas de instrumento armadas, compensando la latencia de salida, y reproducirlo
   sincronizado con el audio; también se incluye al renderizar.
-- ⏳ Editor piano roll (mover, alargar y dibujar notas), cuantizar.
+- ✅ Editor MIDI (piano roll): doble clic en un ítem MIDI. Teclado con escucha previa, lápiz para dibujar,
+  selección por rectángulo, mover / alargar notas con la grilla, doble clic en una nota la borra, carril de velocidad.
+- ✅ Cuantizar (Q) a 1, 1/2, 1/4, 1/8, 1/16, 1/32 y tresillos, con intensidad (25–100 %) y opción de duración.
+  Transponer (↑/↓, ⇧ = octava), mover con ←/→, legato, duplicar (⌘D), seleccionar todo (⌘A).
+- ✅ Doble clic en una zona vacía de una pista de instrumento crea un ítem MIDI de 4 compases para dibujar.
+- ⏳ Controladores continuos (CC, pitch bend) en el editor, escalas y acordes, humanizar.
 
 ## 4. Plugins: que tus plugins abran igual que en REAPER
 
@@ -109,5 +114,5 @@ REAPER carga VST, VST3, AU y CLAP. Worship DAW usa **Audio Units**, el formato n
 3. Envolventes de automatización (volumen, paneo, parámetros de plugins), con escritura por MIDI.
 4. Carpetas, sends y buses (click y guía a salidas separadas para in-ears).
 5. Mackie Control / HUI para controladores con faders motorizados.
-6. ~~Pistas MIDI con instrumentos AU.~~ ✅ (falta el editor piano roll)
+6. ~~Pistas MIDI con instrumentos AU y piano roll.~~ ✅
 7. Editor de acciones y atajos personalizables (como la lista de acciones de REAPER, F4).

@@ -221,3 +221,55 @@ final class MIDITests: XCTestCase {
         XCTAssertEqual(p.tracks[0].midiClips.first?.start, 6)
     }
 }
+
+
+final class PianoRollTests: XCTestCase {
+    private func clip() -> MIDIClip {
+        MIDIClip(name: "Keys", start: 1, duration: 4, notes: [
+            MIDINote(pitch: 60, velocity: 90, start: 0.12, duration: 0.4),
+            MIDINote(pitch: 64, velocity: 90, start: 1.04, duration: 0.3),
+            MIDINote(pitch: 67, velocity: 90, start: 1.96, duration: 0.9),
+        ])
+    }
+
+    func testGridSeconds() {
+        let t = Timeline(bpm: 120, beatsPerBar: 4)
+        XCTAssertEqual(MIDIGrid.sixteenth.seconds(in: t), 0.125, accuracy: 1e-9)
+        XCTAssertEqual(MIDIGrid.eighthTriplet.seconds(in: t), 1.0 / 6, accuracy: 1e-9)
+        XCTAssertEqual(MIDIGrid.bar.seconds(in: Timeline(bpm: 60, beatsPerBar: 3)), 3, accuracy: 1e-9)
+    }
+
+    func testQuantizeUsesProjectGrid() {
+        var c = clip()
+        // El ítem empieza en 1 s; la grilla de 0,5 s es del proyecto: 1,12 → 1,0 (relativo 0).
+        c.quantize(grid: 0.5)
+        XCTAssertEqual(c.notes.map(\.start), [0, 1, 2])
+        var half = clip()
+        half.quantize(grid: 0.5, strength: 0.5)
+        XCTAssertEqual(half.notes[0].start, 0.06, accuracy: 1e-9)
+        var lengths = clip()
+        lengths.quantize(grid: 0.5, lengths: true)
+        XCTAssertEqual(lengths.notes.map(\.duration), [0.5, 0.5, 1.0])
+    }
+
+    func testEditingOperations() {
+        var c = clip()
+        let first = c.notes[0].id
+        c.transpose([first], semitones: 12)
+        XCTAssertEqual(c.notes[0].pitch, 72)
+        c.legato()
+        XCTAssertEqual(c.notes[0].duration, 1.04 - 0.12, accuracy: 1e-9)
+        XCTAssertEqual(c.notes[2].duration, 4 - 1.96, accuracy: 1e-9)
+        c.move([c.notes[2].id], by: 3, semitones: -1)
+        XCTAssertEqual(c.notes.last?.pitch, 66)
+        XCTAssertGreaterThan(c.duration, 4)   // el ítem se alarga para contener la nota
+        let new = c.duplicateNotes([first])
+        XCTAssertEqual(new.count, 1)
+        XCTAssertEqual(c.notes.count, 4)
+        c.removeNotes(new)
+        c.setVelocity([first], to: 200)
+        XCTAssertEqual(c.notes.first { $0.id == first }?.velocity, 127)
+        XCTAssertEqual(MIDINote.name(for: 60), "Do4")
+        XCTAssertTrue(MIDINote.isBlackKey(61))
+    }
+}

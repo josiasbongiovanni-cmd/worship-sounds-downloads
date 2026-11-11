@@ -467,6 +467,36 @@ final class Session {
         if let newID { selectedClipID = newID }
     }
 
+    // MARK: - Editor MIDI (piano roll)
+
+    /// Ítem MIDI abierto en el piano roll (doble clic en el ítem, como en REAPER).
+    var editingMIDIClipID: UUID?
+
+    func midiClip(_ id: UUID) -> (track: Track, clip: MIDIClip)? {
+        guard let loc = project.midiClipLocation(id) else { return nil }
+        return (project.tracks[loc.track], project.tracks[loc.track].midiClips[loc.clip])
+    }
+
+    func updateMIDIClip(_ id: UUID, undoable: Bool = true, _ change: (inout MIDIClip) -> Void) {
+        edit(undoable: undoable) { p in
+            guard let loc = p.midiClipLocation(id) else { return }
+            change(&p.tracks[loc.track].midiClips[loc.clip])
+        }
+    }
+
+    /// Crea un ítem MIDI vacío (4 compases) en una pista de instrumento y lo abre en el editor.
+    func createMIDIClip(on trackID: UUID, at time: TimeInterval? = nil, bars: Int = 4) {
+        guard let i = project.trackIndex(trackID), project.tracks[i].isInstrument else { return }
+        let start = snapEnabled ? project.timeline.snap(time ?? editCursor, division: Double(project.beatsPerBar))
+                                : (time ?? editCursor)
+        let clip = MIDIClip(name: "\(project.tracks[i].name) · MIDI", start: max(0, start),
+                            duration: project.timeline.secondsPerBar * Double(bars))
+        edit { $0.addMIDIClip(clip, toTrack: trackID) }
+        selectedTrackID = trackID
+        selectedClipID = clip.id
+        editingMIDIClipID = clip.id
+    }
+
     // MARK: - Secciones
 
     func addSection(_ kind: SectionKind, bars: Int = 8) {

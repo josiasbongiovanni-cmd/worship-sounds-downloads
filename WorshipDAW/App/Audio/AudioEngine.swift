@@ -425,6 +425,17 @@ final class AudioEngine {
         }
     }
 
+    /// Hace sonar una nota corta en el instrumento de la pista (al hacer clic en el piano roll).
+    func previewNote(trackID: UUID, pitch: Int, velocity: Int = 100, length: TimeInterval = 0.35) {
+        guard let block = strips[trackID]?.instrument?.unit.auAudioUnit.scheduleMIDIEventBlock else { return }
+        let p = UInt8(clamping: max(0, min(127, pitch)))
+        RawMIDI(status: 0x90, data1: p, data2: UInt8(clamping: max(1, min(127, velocity))))
+            .send(to: block, at: AUEventSampleTimeImmediate)
+        DispatchQueue.main.asyncAfter(deadline: .now() + length) {
+            RawMIDI(status: 0x80, data1: p, data2: 0).send(to: block, at: AUEventSampleTimeImmediate)
+        }
+    }
+
     /// Qué pistas de instrumento suenan con tu teclado: las armadas o, si no hay, la seleccionada.
     func setLiveMIDITracks(_ ids: [UUID]) {
         liveMIDITrackIDs = ids

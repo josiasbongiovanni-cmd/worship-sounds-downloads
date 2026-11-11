@@ -69,6 +69,10 @@ struct EditorView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .worshipShowPreferences)) { _ in showPreferences = true }
         .onChange(of: session.selectedTrackID) { _, _ in session.refreshLiveMIDI() }
+        .sheet(item: Binding(get: { session.editingMIDIClipID.map(IdentifiedUUID.init) },
+                             set: { session.editingMIDIClipID = $0?.id })) { item in
+            PianoRollView(session: session, clipID: item.id)
+        }
         .overlay(alignment: .bottom) { MIDILearnBanner(midi: app.midi) }
         .sheet(isPresented: $showPreferences) {
             NavigationStack {

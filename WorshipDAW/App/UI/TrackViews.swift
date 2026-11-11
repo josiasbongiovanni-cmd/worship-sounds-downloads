@@ -116,6 +116,11 @@ struct TrackHeaderView: View {
                     Button(color.displayName) { session.updateTrack(track.id) { $0.color = color } }
                 }
             } label: { Label("Color", systemImage: "paintpalette") }
+            if track.isInstrument {
+                Button { session.createMIDIClip(on: track.id) } label: {
+                    Label("Nuevo ítem MIDI en el cursor", systemImage: "pianokeys")
+                }
+            }
             Button { onShowInspector() } label: { Label("Inspector", systemImage: "slider.horizontal.3") }
             Divider()
             Button(role: .destructive) { session.removeTrack(track.id) } label: {
@@ -144,6 +149,12 @@ struct TrackLaneView: View {
         ZStack(alignment: .topLeading) {
             Color.clear
                 .contentShape(Rectangle())
+                .onTapGesture(count: 2, coordinateSpace: .local) { location in
+                    // Doble clic en una pista de instrumento: nuevo ítem MIDI para dibujar notas.
+                    if track.isInstrument {
+                        session.createMIDIClip(on: track.id, at: Double(location.x) / session.pixelsPerSecond)
+                    }
+                }
                 .onTapGesture(coordinateSpace: .local) { location in
                     session.selectedTrackID = track.id
                     session.selectedClipID = nil
@@ -495,12 +506,20 @@ struct MIDIClipView: View {
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            // Doble clic: abrir en el editor MIDI (como en REAPER).
+            session.selectedClipID = clip.id
+            session.editingMIDIClipID = clip.id
+        }
         .onTapGesture {
             session.selectedClipID = clip.id
             session.selectedTrackID = track.id
         }
         .gesture(canDirectDrag ? moveGesture : nil)
         .contextMenu {
+            Button { session.editingMIDIClipID = clip.id } label: {
+                Label("Abrir en el editor MIDI", systemImage: "pianokeys")
+            }
             Button { session.selectedClipID = clip.id; session.duplicateSelection() } label: {
                 Label("Duplicar", systemImage: "plus.square.on.square")
             }

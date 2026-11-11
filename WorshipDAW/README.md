@@ -18,6 +18,7 @@ y **una sola base de código para Mac y iPhone/iPad** (SwiftUI + AVAudioEngine).
 | **Audio y MIDI** | Preferencias como REAPER: interfaz de entrada y salida, frecuencia, buffer y latencia; controladores MIDI con *Aprender MIDI*. |
 | **Marcadores** | M inserta, 1–9 salta; selección de tiempo arrastrando en la regla. |
 | **En vivo** (iPhone) | Pads grandes por sección para navegar la canción en el ensayo o el domingo. |
+| **MIDI** | Pistas de instrumento con cualquier AU, tocar en vivo con tu controlador, grabar MIDI y editarlo en el piano roll (cuantizar, transponer, velocidad, legato). |
 | **Exportar** | Mezcla a WAV 24‑bit / 48 kHz (render offline) y compartir. |
 
 ### Atajos (los de REAPER por defecto)

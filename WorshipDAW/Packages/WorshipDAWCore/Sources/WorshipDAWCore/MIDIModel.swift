@@ -1,14 +1,16 @@
 import Foundation
 
 /// Nota MIDI dentro de un ítem. Los tiempos son segundos relativos al inicio del ítem.
-public struct MIDINote: Codable, Hashable, Sendable {
+public struct MIDINote: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
     public var pitch: Int        // 0…127 (60 = Do central)
     public var velocity: Int     // 1…127
     public var channel: Int      // 1…16
     public var start: TimeInterval
     public var duration: TimeInterval
 
-    public init(pitch: Int, velocity: Int, channel: Int = 1, start: TimeInterval, duration: TimeInterval) {
+    public init(id: UUID = UUID(), pitch: Int, velocity: Int, channel: Int = 1, start: TimeInterval, duration: TimeInterval) {
+        self.id = id
         self.pitch = pitch
         self.velocity = velocity
         self.channel = channel
@@ -17,6 +19,26 @@ public struct MIDINote: Codable, Hashable, Sendable {
     }
 
     public var end: TimeInterval { start + duration }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        pitch = try c.decode(Int.self, forKey: .pitch)
+        velocity = try c.decodeIfPresent(Int.self, forKey: .velocity) ?? 100
+        channel = try c.decodeIfPresent(Int.self, forKey: .channel) ?? 1
+        start = try c.decode(TimeInterval.self, forKey: .start)
+        duration = try c.decode(TimeInterval.self, forKey: .duration)
+    }
+
+    /// Nombre de la nota en notación latina: Do4 = 60.
+    public static func name(for pitch: Int) -> String {
+        let names = ["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"]
+        return names[((pitch % 12) + 12) % 12] + "\(pitch / 12 - 1)"
+    }
+
+    public static func isBlackKey(_ pitch: Int) -> Bool {
+        [1, 3, 6, 8, 10].contains(((pitch % 12) + 12) % 12)
+    }
 }
 
 /// Ítem MIDI en una pista de instrumento.
