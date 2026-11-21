@@ -2,6 +2,7 @@
 import { forwardRef, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -115,17 +116,20 @@ export function Loading({ message }: { message?: string }) {
   );
 }
 
-/** Logo de texto "MATHU BARBER" */
+const logo = require('@/assets/images/logo.png');
+const LOGO_RATIO = 705 / 825; // ancho / alto del logo
+
+/** Logo de Mathu Barber */
 export function Brand({ size = 'large' }: { size?: 'large' | 'small' }) {
-  const big = size === 'large';
+  const height = size === 'large' ? 230 : 110;
   return (
-    <View style={{ alignItems: 'center', gap: spacing.xs }}>
-      <Text style={[styles.brandMain, { fontSize: big ? 44 : 26 }]}>MATHU</Text>
-      <View style={styles.brandRow}>
-        <View style={styles.brandLine} />
-        <Text style={[styles.brandSub, { fontSize: big ? 16 : 12 }]}>BARBER</Text>
-        <View style={styles.brandLine} />
-      </View>
+    <View style={{ alignItems: 'center' }}>
+      <Image
+        source={logo}
+        style={{ height, width: height * LOGO_RATIO }}
+        resizeMode="contain"
+        accessibilityLabel="Mathu Barber"
+      />
     </View>
   );
 }
@@ -180,8 +184,4 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, backgroundColor: colors.background },
-  brandMain: { color: colors.gold, fontWeight: '800', letterSpacing: 8 },
-  brandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  brandLine: { height: 1, width: 28, backgroundColor: colors.goldDark },
-  brandSub: { color: colors.text, letterSpacing: 6, fontWeight: '600' },
 });

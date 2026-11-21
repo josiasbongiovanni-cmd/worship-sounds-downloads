@@ -28,7 +28,7 @@ export default function LoginScreen() {
 
   return (
     <Screen>
-      <View style={{ paddingTop: spacing.xxl, paddingBottom: spacing.xl }}>
+      <View style={{ paddingTop: spacing.xl, paddingBottom: spacing.lg }}>
         <Brand />
         <T variant="muted" style={{ textAlign: 'center', marginTop: spacing.md }}>
           Reservá tu turno y sumá cortes gratis

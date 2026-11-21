@@ -8,7 +8,7 @@
     "scheme": "mathubarber",
     "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.mathubarber.app",
       "supportsTablet": false
     },
@@ -33,7 +33,7 @@
         {
           "backgroundColor": "#0B0B0D",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 220
         }
       ]
     ],
