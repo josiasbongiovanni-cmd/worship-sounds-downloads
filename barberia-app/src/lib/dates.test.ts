@@ -28,3 +28,21 @@ describe('fechas en horario de Argentina', () => {
     expect(canClientChange('2026-11-25T13:59:00Z', 2, now)).toBe(false);
   });
 });
+
+describe('semana y días para la agenda', () => {
+  const { addDays, weekStart, localIso, weekdayOf, dayStartIso } = require('./dates');
+  it('suma días cruzando meses', () => {
+    expect(addDays('2026-11-30', 1)).toBe('2026-12-01');
+    expect(addDays('2026-12-01', -1)).toBe('2026-11-30');
+  });
+  it('la semana empieza el lunes', () => {
+    expect(weekStart('2026-11-25')).toBe('2026-11-23'); // miércoles -> lunes
+    expect(weekStart('2026-11-23')).toBe('2026-11-23'); // lunes
+    expect(weekStart('2026-11-29')).toBe('2026-11-23'); // domingo -> lunes anterior
+  });
+  it('arma fechas/horas en horario argentino', () => {
+    expect(new Date(localIso('2026-11-25', '15:30')).toISOString()).toBe('2026-11-25T18:30:00.000Z');
+    expect(new Date(dayStartIso('2026-11-25')).toISOString()).toBe('2026-11-25T03:00:00.000Z');
+    expect(weekdayOf('2026-11-24')).toBe(2);
+  });
+});

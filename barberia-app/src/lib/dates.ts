@@ -55,3 +55,33 @@ export function relativeDay(day: string, now: Date = new Date()): string | null 
 export function canClientChange(startsAt: string, limitHours: number, now: Date = new Date()): boolean {
   return new Date(startsAt).getTime() - now.getTime() >= limitHours * 3600 * 1000;
 }
+
+/** Suma días a un día "YYYY-MM-DD" */
+export function addDays(day: string, n: number): string {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Lunes de la semana de ese día */
+export function weekStart(day: string): string {
+  const dow = new Date(`${day}T12:00:00Z`).getUTCDay(); // 0 = domingo
+  return addDays(day, dow === 0 ? -6 : 1 - dow);
+}
+
+/** Inicio de un día argentino, como fecha/hora ISO con zona */
+export function dayStartIso(day: string): string {
+  return `${day}T00:00:00-03:00`;
+}
+
+/** Fecha/hora ISO para un día y hora argentinos ("2026-11-25", "15:30") */
+export function localIso(day: string, time: string): string {
+  return `${day}T${time}:00-03:00`;
+}
+
+/** Día de la semana (0 = domingo) de un día "YYYY-MM-DD" */
+export function weekdayOf(day: string): number {
+  return new Date(`${day}T12:00:00Z`).getUTCDay();
+}
+
+export const WEEKDAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];

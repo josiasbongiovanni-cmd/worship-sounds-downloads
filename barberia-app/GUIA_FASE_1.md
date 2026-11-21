@@ -15,6 +15,7 @@ Tarda unos 20 minutos la primera vez.
    - `20261121000002_initial_data.sql`: crea el barbero "Mathu", los servicios y el horario (martes a sábado).
    - `20261121000003_precios_reales.sql`: precios reales (Corte $12.000, Corte y barba $15.000) y turnos cada 1 hora.
    - `20261121000004_reservas.sql`: las funciones para reservar, cancelar y reprogramar (Fase 2).
+   - `20261122000005_panel_admin.sql`: el panel del administrador (Fase 3).
 5. Para comprobarlo, entrá a **Table Editor**: tienen que aparecer las tablas `services`, `appointments`, `loyalty_cards`, etc.
 
 > ⚠️ Cada archivo se corre **una sola vez**. Si lo corrés dos veces vas a ver un error de que algo "already exists"; no pasa nada malo.

@@ -1,14 +1,24 @@
-import { Tabs } from 'expo-router/js-tabs';
+import { Stack } from 'expo-router';
 
-import { tabIcon, tabScreenOptions } from '@/components/tab-bar';
+import { colors } from '@/constants/theme';
 
-export default function AdminTabs() {
+export default function AdminLayout() {
   return (
-    <Tabs screenOptions={tabScreenOptions}>
-      <Tabs.Screen name="index" options={{ title: 'Agenda', tabBarIcon: tabIcon('today') }} />
-      <Tabs.Screen name="servicios" options={{ title: 'Servicios', tabBarIcon: tabIcon('cut') }} />
-      <Tabs.Screen name="clientes" options={{ title: 'Clientes', tabBarIcon: tabIcon('people') }} />
-      <Tabs.Screen name="perfil" options={{ title: 'Perfil', tabBarIcon: tabIcon('person') }} />
-    </Tabs>
+    <Stack
+      screenOptions={{
+        headerStyle: { backgroundColor: colors.background },
+        headerTintColor: colors.gold,
+        headerTitleStyle: { color: colors.text },
+        headerShadowVisible: false,
+        headerBackTitle: 'Volver',
+        contentStyle: { backgroundColor: colors.background },
+      }}>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="servicios" options={{ title: 'Servicios' }} />
+      <Stack.Screen name="servicio" options={{ title: 'Servicio' }} />
+      <Stack.Screen name="horarios" options={{ title: 'Días y horarios' }} />
+      <Stack.Screen name="bloqueos" options={{ title: 'Feriados y bloqueos' }} />
+      <Stack.Screen name="reglas" options={{ title: 'Reglas de reserva' }} />
+    </Stack>
   );
 }
