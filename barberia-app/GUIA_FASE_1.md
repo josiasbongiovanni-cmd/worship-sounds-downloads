@@ -11,8 +11,10 @@ Tarda unos 20 minutos la primera vez.
 2. En el menú de la izquierda, entrá a **SQL Editor** y tocá **New query**.
 3. Abrí el archivo `supabase/migrations/20261121000001_base.sql`, copiá **todo** el contenido, pegalo y tocá **Run**.
    Tiene que aparecer *"Success. No rows returned"*.
-4. Repetí lo mismo con `supabase/migrations/20261121000002_initial_data.sql`.
-   Esto crea el barbero "Mathu", 3 servicios de ejemplo y el horario de martes a sábado.
+4. Repetí lo mismo, **en orden**, con el resto de los archivos de `supabase/migrations/`:
+   - `20261121000002_initial_data.sql`: crea el barbero "Mathu", los servicios y el horario (martes a sábado).
+   - `20261121000003_precios_reales.sql`: precios reales (Corte $12.000, Corte y barba $15.000) y turnos cada 1 hora.
+   - `20261121000004_reservas.sql`: las funciones para reservar, cancelar y reprogramar (Fase 2).
 5. Para comprobarlo, entrá a **Table Editor**: tienen que aparecer las tablas `services`, `appointments`, `loyalty_cards`, etc.
 
 > ⚠️ Cada archivo se corre **una sola vez**. Si lo corrés dos veces vas a ver un error de que algo "already exists"; no pasa nada malo.

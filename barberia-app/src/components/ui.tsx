@@ -20,9 +20,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, font, radius, spacing, touch } from '@/constants/theme';
 
-export function Screen({ children, scroll = true }: { children: ReactNode; scroll?: boolean }) {
+/** Contenedor de pantalla. withHeader: la pantalla ya tiene barra de título (no repetir el espacio del notch). */
+export function Screen({ children, scroll = true, withHeader = false }: { children: ReactNode; scroll?: boolean; withHeader?: boolean }) {
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.safe} edges={withHeader ? ['left', 'right'] : ['top', 'left', 'right']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {scroll ? (
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">

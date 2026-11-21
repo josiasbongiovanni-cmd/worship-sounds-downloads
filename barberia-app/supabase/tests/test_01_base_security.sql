@@ -63,7 +63,7 @@ begin
   exception when insufficient_privilege then failed := true; end;
   perform tests.ok(failed or (select count(*) from public.services where price = 1) = 0, 'el cliente NO puede cambiar precios');
 
-  perform tests.ok((select count(*) from public.services) = 3, 'el cliente ve los servicios activos');
+  perform tests.ok((select count(*) from public.services where active) = 2, 'el cliente ve los 2 servicios activos');
   perform tests.logout();
 
   -- ===== Como admin =====

@@ -1,14 +1,19 @@
-import { Tabs } from 'expo-router/js-tabs';
+import { Stack } from 'expo-router';
 
-import { tabIcon, tabScreenOptions } from '@/components/tab-bar';
+import { colors } from '@/constants/theme';
 
-export default function ClientTabs() {
+export default function ClientLayout() {
   return (
-    <Tabs screenOptions={tabScreenOptions}>
-      <Tabs.Screen name="index" options={{ title: 'Inicio', tabBarIcon: tabIcon('home') }} />
-      <Tabs.Screen name="turnos" options={{ title: 'Mis turnos', tabBarIcon: tabIcon('calendar') }} />
-      <Tabs.Screen name="tarjeta" options={{ title: 'Mi tarjeta', tabBarIcon: tabIcon('ribbon') }} />
-      <Tabs.Screen name="perfil" options={{ title: 'Perfil', tabBarIcon: tabIcon('person') }} />
-    </Tabs>
+    <Stack
+      screenOptions={{
+        headerStyle: { backgroundColor: colors.background },
+        headerTintColor: colors.gold,
+        headerTitleStyle: { color: colors.text },
+        headerShadowVisible: false,
+        contentStyle: { backgroundColor: colors.background },
+      }}>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="reservar" options={{ title: 'Reservar turno', headerBackTitle: 'Volver' }} />
+    </Stack>
   );
 }

@@ -6,7 +6,7 @@ App móvil (Android + iPhone) para reservar turnos en **Mathu Barber**, Villa Go
 - **Backend:** Supabase. La base de datos, la seguridad y las reglas están en `supabase/migrations/`
 - **Pruebas:** `supabase/tests/` (base de datos) y `src/**/*.test.ts` (lógica)
 
-👉 Para empezar, leé **[GUIA_FASE_1.md](./GUIA_FASE_1.md)**.
+👉 Para empezar, leé **[GUIA_FASE_1.md](./GUIA_FASE_1.md)** y después **[GUIA_FASE_2.md](./GUIA_FASE_2.md)**.
 
 ## Estructura
 
@@ -24,7 +24,7 @@ supabase/tests      pruebas de seguridad, turnos superpuestos y fidelidad
 ## Estado
 
 - [x] Fase 1: base, base de datos, login y roles
-- [ ] Fase 2: reservas
+- [x] Fase 2: reservas
 - [ ] Fase 3: panel admin
 - [ ] Fase 4: fidelidad
 - [ ] Fase 5: notificaciones
