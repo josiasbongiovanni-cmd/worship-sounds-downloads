@@ -6,6 +6,8 @@ App móvil (Android + iPhone) para reservar turnos en **Mathu Barber**, Villa Go
 - **Backend:** Supabase. La base de datos, la seguridad y las reglas están en `supabase/migrations/`
 - **Pruebas:** `supabase/tests/` (base de datos) y `src/**/*.test.ts` (lógica)
 
+📌 **Estado y próximos pasos: [ESTADO.md](./ESTADO.md)**
+
 👉 Para empezar, leé **[GUIA_FASE_1.md](./GUIA_FASE_1.md)** después **[GUIA_FASE_2.md](./GUIA_FASE_2.md)** y **[GUIA_FASE_3.md](./GUIA_FASE_3.md)**.
 
 ## Estructura
