@@ -12,6 +12,43 @@ on:
   workflow_dispatch:
     inputs:
       windows:
+        description: "Compilar para Windows"
+        type: boolean
+        default: true
+      macos:
+        description: "Compilar para macOS"
+        type: boolean
+        default: true
+
+concurrency:
+  group: daw-juce-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Pruebas (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: DAW
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxext-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev
+      - name: Revisar textos UTF-8
+        run: python3 lint_utf8.py
+      - name: Configurar
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Compilar
+        run: cmake --build build
+      - name: Pruebas del modelo, el motor y la superficie de control
+        run: ./build/WorshipDAWTests_artefacts/Release/WorshipDAWTests
+
+  windows:
     name: Windows (x64)
     needs: tests
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.windows)
