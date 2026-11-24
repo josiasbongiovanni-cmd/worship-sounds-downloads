@@ -115,6 +115,31 @@ AudioEngine::~AudioEngine()
 juce::String AudioEngine::openDevices (const juce::XmlElement* savedState)
 {
     auto error = devices.initialise (256, 256, savedState, true);
+   #if JUCE_WINDOWS && JUCE_ASIO
+    // Primera vez en Windows: si hay una interfaz con driver ASIO propio, usarla (menor latencia, como REAPER).
+    // Se evitan los drivers genéricos (ASIO4ALL, Realtek…), que suelen andar peor que WASAPI.
+    if (savedState == nullptr)
+    {
+        const auto previousType = devices.getCurrentAudioDeviceType();
+        bool opened = false;
+        for (auto* type : devices.getAvailableDeviceTypes())
+            if (type->getTypeName() == "ASIO")
+            {
+                type->scanForDevices();
+                for (auto& name : type->getDeviceNames())
+                {
+                    if (name.containsIgnoreCase ("ASIO4ALL") || name.containsIgnoreCase ("Realtek") || name.containsIgnoreCase ("Generic")
+                        || name.containsIgnoreCase ("FL Studio")) continue;
+                    devices.setCurrentAudioDeviceType ("ASIO", true);
+                    auto setup = devices.getAudioDeviceSetup();
+                    setup.outputDeviceName = setup.inputDeviceName = name;
+                    if (devices.setAudioDeviceSetup (setup, true).isEmpty() && devices.getCurrentAudioDevice() != nullptr) { error = {}; opened = true; break; }
+                }
+                if (! opened) devices.setCurrentAudioDeviceType (previousType, true);   // vuelve a WASAPI
+                break;
+            }
+    }
+   #endif
     enableAllChannels();
     devices.addAudioCallback (this);
     devices.addMidiInputDeviceCallback ({}, this);

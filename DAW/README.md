@@ -26,7 +26,7 @@ Un solo código en C++ (JUCE 8) para macOS y Windows.
   - Ctrl/Cmd + arrastrar un tramo lo curva.
   - Los faders siguen a la automatización durante la reproducción.
 - **Plugins VST3 y AU** (inserts por pista, instrumento por pista, cadena en el master), con compensación de latencia (PDC). Los estados se guardan dentro del proyecto.
-- **Interfaces de audio:** CoreAudio (Mac), WASAPI y DirectSound (Windows); entradas mono/estéreo por pista, monitoreo (apagado/encendido/automático), salidas directas para click y guía (in-ears).
+- **Interfaces de audio:** CoreAudio (Mac), ASIO, WASAPI y DirectSound (Windows; ASIO requiere el SDK de Steinberg, ver DISTRIBUCION.md); entradas mono/estéreo por pista, monitoreo (apagado/encendido/automático), salidas directas para click y guía (in-ears).
 - **Grabación:** punch-in, cuenta previa y compensación de latencia (de la interfaz + plugins + ajuste manual). Se graba directo al disco, en la carpeta Audio/ del proyecto.
 - **MIDI:** controladores en vivo, grabación de notas, pedal sustain, pitch bend y aftertouch. Piano roll con cuantización (fuerza y duración), transponer, legato, humanizar y carril de velocidad. Aprender MIDI para faders, mute/solo y transporte.
 - **Superficies de control Mackie Control (MCU):** Behringer X-Touch, iCON Platform, PreSonus FaderPort (modo MCU), Mackie MCU Pro…
@@ -68,11 +68,18 @@ build\WorshipDAW_artefacts\Release\"Worship DAW.exe"
 - Las pruebas corren en Linux en cada push.
 - Windows y macOS se compilan a mano (Actions → Run workflow) o al crear un tag `v*`. El instalable queda como artefacto descargable.
 
-## Pendiente antes del lanzamiento
+## Distribuir (firma, instaladores, ASIO)
 
-- ASIO en Windows: requiere el SDK de Steinberg y aceptar su licencia; hoy se usa WASAPI. Activar con `JUCE_ASIO=1` y la ruta del SDK.
+Todo está en [DISTRIBUCION.md](DISTRIBUCION.md):
+- licencias (JUCE, ASIO);
+- ASIO en Windows;
+- firma y notarización en Mac (.dmg);
+- firma en Windows e instalador (.exe);
+- cómo publicar una versión con un tag.
+
+## Pendiente
+
 - Escaneo de plugins en un proceso separado. Hoy, si un plugin se cuelga al escanearlo, queda marcado y se salta la próxima vez.
-- Firma y notarización en Mac (cuenta de Apple Developer) y firma de código en Windows.
 - Exportar a MP3, extensores Mackie (XT) y modos Plugin/EQ de la superficie.
 
 ## Código

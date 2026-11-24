@@ -2,3 +2,6 @@ build/
 build-*/
 *.user
 .DS_Store
+# SDK de terceros que no se puede redistribuir (ASIO de Steinberg)
+ThirdParty/asiosdk/
+dist/

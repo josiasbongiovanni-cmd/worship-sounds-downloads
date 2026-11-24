@@ -3,6 +3,8 @@ project(WorshipDAW VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Windows: runtime de C++ enlazado dentro del .exe (no hace falta instalar el "Visual C++ Redistributable")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "macOS mínimo")
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Universal (Apple Silicon + Intel)")
@@ -36,10 +38,29 @@ set(WDAW_DEFINITIONS
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_USE_FLAC=1
     JUCE_USE_OGGVORBIS=1
-    JUCE_ASIO=0
     JUCE_WASAPI=1
     JUCE_DIRECTSOUND=1
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
+
+# ASIO (Windows): necesita el ASIO SDK de Steinberg, que no se incluye en el repositorio (licencia propia).
+# Descárgalo con scripts/get-asio-sdk.ps1 (o pásalo con -DWDAW_ASIO_SDK=<carpeta>). Sin SDK: WASAPI y DirectSound.
+set(WDAW_ASIO_SDK "" CACHE PATH "Carpeta del ASIO SDK de Steinberg (Windows)")
+if(WIN32 AND NOT WDAW_ASIO_SDK AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/asiosdk/common/asio.h")
+    set(WDAW_ASIO_SDK "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/asiosdk")
+endif()
+if(WIN32 AND WDAW_ASIO_SDK)
+    if(NOT EXISTS "${WDAW_ASIO_SDK}/common/asio.h")
+        message(FATAL_ERROR "WDAW_ASIO_SDK no contiene common/asio.h: ${WDAW_ASIO_SDK}")
+    endif()
+    message(STATUS "ASIO activado (SDK en ${WDAW_ASIO_SDK})")
+    list(APPEND WDAW_DEFINITIONS JUCE_ASIO=1)
+    include_directories("${WDAW_ASIO_SDK}/common")
+else()
+    if(WIN32)
+        message(STATUS "ASIO desactivado: falta el ASIO SDK (ver scripts/get-asio-sdk.ps1). Se usa WASAPI / DirectSound.")
+    endif()
+    list(APPEND WDAW_DEFINITIONS JUCE_ASIO=0)
+endif()
 
 set(WDAW_MODULES
     juce::juce_audio_utils
@@ -59,7 +80,7 @@ juce_add_gui_app(WorshipDAW
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Worship DAW usa tu micrófono o interfaz de audio para grabar."
     HARDENED_RUNTIME_ENABLED TRUE
-    HARDENED_RUNTIME_OPTIONS com.apple.security.device.audio-input com.apple.security.cs.disable-library-validation com.apple.security.cs.allow-jit
+    HARDENED_RUNTIME_OPTIONS com.apple.security.device.audio-input com.apple.security.cs.disable-library-validation com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory
     DOCUMENT_EXTENSIONS worship
     ICON_BIG ${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png)
 
