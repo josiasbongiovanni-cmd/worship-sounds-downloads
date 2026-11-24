@@ -42,5 +42,3 @@ example
 /ios
 /android
 
-# claves de Supabase (no subir)
-.env

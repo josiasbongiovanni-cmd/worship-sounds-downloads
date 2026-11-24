@@ -1,6 +1,6 @@
 # Mathu Barber · Estado del proyecto
 
-_Última actualización: 22/11/2026_
+_Última actualización: 24/11/2026_
 
 ## Hecho ✅
 - **Fase 1**: base de datos, seguridad, login y registro, roles, logo e íconos.
@@ -14,11 +14,9 @@ _Última actualización: 22/11/2026_
 - El horario es de ejemplo (martes a sábado, 9–13 y 15–20). **El admin lo carga desde la app.**
 
 ## Para retomar 🔜
-1. **Supabase**: ya se creó el proyecto `mathu-barber`, pero el token guardado solo ve el proyecto viejo "Activa-vgg".
-   - Crear un token nuevo en supabase.com/dashboard/account/tokens y guardarlo en el formulario seguro.
-   - Después, Claude: corre los 5 SQL de `supabase/migrations/`, desactiva la confirmación de email, completa el `.env` y prueba todo contra el proyecto real.
-   - ⚠️ **No tocar "Activa-vgg"** (es otra app, con usuarios reales).
-2. **Celular**: en la Mac, `npx expo start` y escanear el QR con Expo Go (ver `GUIA_FASE_1.md`, pasos 4 a 6).
+1. **Supabase** ✅ listo (24/11): proyecto "Mathu Barber" con la base completa (5 archivos SQL), confirmación de email
+   desactivada para probar, y la app conectada (`.env`). Las 87 pruebas pasaron contra la base real.
+2. **Celular**: en la Mac → ver `COMO_ABRIR_EN_EL_CELULAR.md`. Registrarse en la app y pasarle el email a Claude para hacerlo admin.
 3. **Fase 4**: fidelidad (sumar sellos al completar, canje, historial, ajuste manual y estadísticas).
 4. **Fase 5**: notificaciones push.
 5. **Fase 6**: diseño final, APK, TestFlight y App Store.
