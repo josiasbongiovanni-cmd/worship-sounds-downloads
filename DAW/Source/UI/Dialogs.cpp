@@ -305,7 +305,7 @@ namespace
             g.setFont (font (12));
             g.drawFittedText (juce::String::fromUTF8 (
                 "Funciona con superficies en modo Mackie Control / MCU (Behringer X-Touch, iCON Platform, PreSonus FaderPort, "
-                "Mackie MCU Pro…). Pon la superficie en modo MCU (o "Mackie Control") y elige sus puertos.\n\n"
+                "Mackie MCU Pro…). Pon la superficie en modo MCU (o 'Mackie Control') y elige sus puertos.\n\n"
                 "Faders = volumen (tocar un fader escribe automatización en Touch/Latch) · V-Pots = paneo, o envíos con SEND "
                 "(SEND otra vez = bus siguiente; pulsar el V-Pot crea o silencia el envío) · Bank / Channel ◀ ▶ = mover los 8 canales · "
                 "REC / SOLO / MUTE / SELECT por canal · Play, Stop (parado: al inicio), Rec, Cycle = repetir, Click, Marker · "
