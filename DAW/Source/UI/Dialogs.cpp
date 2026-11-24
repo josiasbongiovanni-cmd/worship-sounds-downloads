@@ -305,13 +305,13 @@ namespace
             g.setFont (font (12));
             g.drawFittedText (juce::String::fromUTF8 (
                 "Funciona con superficies en modo Mackie Control / MCU (Behringer X-Touch, iCON Platform, PreSonus FaderPort, "
-                "Mackie MCU Pro…). Pon la superficie en modo MCU (o 'Mackie Control') y elige sus puertos.\n\n"
-                "Faders = volumen (tocar un fader escribe automatización en Touch/Latch) · V-Pots = paneo, o envíos con SEND "
-                "(SEND otra vez = bus siguiente; pulsar el V-Pot crea o silencia el envío) · Bank / Channel ◀ ▶ = mover los 8 canales · "
-                "REC / SOLO / MUTE / SELECT por canal · Play, Stop (parado: al inicio), Rec, Cycle = repetir, Click, Marker · "
-                "◀◀ ▶▶ = marcador anterior / siguiente · F1–F8 = ir a marcadores 1–8 · Jog = mover el cursor (Shift: de a compás) · "
-                "▲ ▼ = pista anterior / siguiente · Read, Touch, Latch, Write (= Latch), Trim (= apagada) para la pista seleccionada · "
-                "Save · Undo (Shift = Redo) · Name/Value = ver dB."),
+                "Mackie MCU Pro…). Pon la superficie en modo MCU (o 'Mackie Control') y elige sus puertos.\n\n"   // utf8-ok (dentro de fromUTF8)
+                "Faders = volumen (tocar un fader escribe automatización en Touch/Latch) · V-Pots = paneo, o envíos con SEND "   // utf8-ok (dentro de fromUTF8)
+                "(SEND otra vez = bus siguiente; pulsar el V-Pot crea o silencia el envío) · Bank / Channel ◀ ▶ = mover los 8 canales · "   // utf8-ok (dentro de fromUTF8)
+                "REC / SOLO / MUTE / SELECT por canal · Play, Stop (parado: al inicio), Rec, Cycle = repetir, Click, Marker · "   // utf8-ok (dentro de fromUTF8)
+                "◀◀ ▶▶ = marcador anterior / siguiente · F1–F8 = ir a marcadores 1–8 · Jog = mover el cursor (Shift: de a compás) · "   // utf8-ok (dentro de fromUTF8)
+                "▲ ▼ = pista anterior / siguiente · Read, Touch, Latch, Write (= Latch), Trim (= apagada) para la pista seleccionada · "   // utf8-ok (dentro de fromUTF8)
+                "Save · Undo (Shift = Redo) · Name/Value = ver dB."),   // utf8-ok (dentro de fromUTF8)
                 info, juce::Justification::topLeft, 14);
         }
 
