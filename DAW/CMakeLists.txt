@@ -63,12 +63,15 @@ juce_add_gui_app(WorshipDAW
     DOCUMENT_EXTENSIONS worship
     ICON_BIG ${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png)
 
+# Tipografía Inter incluida en la app (mismo aspecto en Mac y Windows). Licencia SIL OFL en Resources/Fonts.
+juce_add_binary_data(WorshipDAWData SOURCES Resources/Fonts/Inter-Regular.otf Resources/Fonts/Inter-SemiBold.otf)
+
 target_sources(WorshipDAW PRIVATE Source/Main.cpp ${WDAW_MODEL_SOURCES} ${WDAW_ENGINE_SOURCES} ${WDAW_UI_SOURCES})
 target_include_directories(WorshipDAW PRIVATE Source)
 target_compile_definitions(WorshipDAW PRIVATE ${WDAW_DEFINITIONS}
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:WorshipDAW,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:WorshipDAW,JUCE_VERSION>")
-target_link_libraries(WorshipDAW PRIVATE ${WDAW_MODULES}
+target_link_libraries(WorshipDAW PRIVATE ${WDAW_MODULES} WorshipDAWData
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
 
 # ---------------------------------------------------------------------------

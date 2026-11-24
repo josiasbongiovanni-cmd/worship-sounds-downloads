@@ -1,0 +1,100 @@
+name: Worship DAW (JUCE)
+
+# Linux: pruebas en cada push (minutos baratos).
+# Windows y macOS: compilación con instalable descargable, a mano o al crear un tag v*.
+on:
+  push:
+    paths:
+      - "DAW/**"
+      - ".github/workflows/daw-juce.yml"
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: "Compilar para Windows"
+        type: boolean
+        default: true
+      macos:
+        description: "Compilar para macOS"
+        type: boolean
+        default: true
+
+concurrency:
+  group: daw-juce-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Pruebas (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: DAW
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxext-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev
+      - name: Revisar textos UTF-8
+        run: python3 lint_utf8.py
+      - name: Configurar
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Compilar
+        run: cmake --build build
+      - name: Pruebas del modelo y del motor
+        run: ./build/WorshipDAWTests_artefacts/Release/WorshipDAWTests
+
+  windows:
+    name: Windows (x64)
+    needs: tests
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.windows)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: DAW
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurar
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+      - name: Compilar
+        run: cmake --build build --config Release --parallel
+      - name: Pruebas
+        run: .\build\WorshipDAWTests_artefacts\Release\WorshipDAWTests.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WorshipDAW-Windows
+          path: DAW/build/WorshipDAW_artefacts/Release/
+          retention-days: 14
+
+  macos:
+    name: macOS (Universal)
+    needs: tests
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.macos)
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: DAW
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurar
+        run: cmake -B build -G Xcode
+      - name: Compilar
+        run: cmake --build build --config Release -- -quiet
+      - name: Pruebas
+        run: ./build/WorshipDAWTests_artefacts/Release/WorshipDAWTests
+      - name: Empaquetar (.zip con firma ad-hoc)
+        run: |
+          cd "build/WorshipDAW_artefacts/Release"
+          codesign --force --deep -s - "Worship DAW.app"
+          ditto -c -k --keepParent "Worship DAW.app" "$GITHUB_WORKSPACE/WorshipDAW-mac.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WorshipDAW-macOS
+          path: WorshipDAW-mac.zip
+          retention-days: 14

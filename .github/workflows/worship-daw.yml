@@ -1,13 +1,7 @@
 name: Worship DAW
 
+# App Swift anterior (reemplazada por DAW/ en JUCE). Solo manual, para no gastar minutos de macOS.
 on:
-  push:
-    paths:
-      - "WorshipDAW/**"
-      - ".github/workflows/worship-daw.yml"
-  pull_request:
-    paths:
-      - "WorshipDAW/**"
   workflow_dispatch:
 
 concurrency:
