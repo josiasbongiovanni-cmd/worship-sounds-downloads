@@ -20,10 +20,10 @@ private:
     Context& ctx;
     int tab = 0;
     juce::TextEditor trackName, songName;
-    juce::ComboBox role, input, monitor, output, keyBox, meterBox, countIn, clickOut;
+    juce::ComboBox role, input, monitor, output, keyBox, meterBox, countIn, clickOut, automationMode;
     juce::Slider bpm, clickVolume, low, mid, high, volume, pan;
     juce::ToggleButton armed { "Armada para grabar" }, eqOn { "EQ activo" }, clickOn { juce::String::fromUTF8 ("Metrónomo") };
-    juce::TextButton chooseInstrument;
+    juce::TextButton chooseInstrument, routing, automationLanes;
     juce::OwnedArray<juce::TextButton> addSectionButtons;
     juce::Rectangle<int> tabsArea, swatchesArea, sectionsArea;
     bool updating = false;

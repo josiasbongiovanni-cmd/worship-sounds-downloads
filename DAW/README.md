@@ -6,6 +6,17 @@ Un solo código en C++ (JUCE 8) para macOS y Windows.
 ## Qué incluye
 
 - **Arreglo:** pistas de audio, guía e instrumento (MIDI); clips con mover/recortar/fundidos, dividir (S), duplicar, copiar/pegar, selección de tiempo, secciones (Intro, Verso, Coro…), marcadores 1–9, repetición (R) y "loop de sección".
+- **Buses y envíos:**
+  - Cada pista sale al Master, a un bus (submezcla) o directo a una salida de la interfaz.
+  - Envíos pre-fader (mezclas de monitoreo) o post-fader (reverb, delay), sin bucles.
+  - El solo respeta los buses, y la latencia de los plugins se compensa en todo el ruteo.
+  - Reverb y Delay incluidos.
+  - Las plantillas con voces traen un bus "Reverb".
+- **Automatización:**
+  - Carriles debajo de cada pista para volumen, paneo, envíos y cualquier parámetro de plugin.
+  - Modos Apagado, Leer, Touch y Latch.
+  - Clic agrega un punto, arrastrar lo mueve, Alt+clic o doble clic lo borra.
+  - Los faders siguen a la automatización durante la reproducción.
 - **Plugins VST3 y AU** (inserts por pista, instrumento por pista, cadena en el master), con compensación de latencia (PDC). Los estados se guardan dentro del proyecto.
 - **Interfaces de audio:** CoreAudio (Mac), WASAPI y DirectSound (Windows); entradas mono/estéreo por pista, monitoreo (apagado/encendido/automático), salidas directas para click y guía (in-ears).
 - **Grabación:** punch-in, cuenta previa y compensación de latencia (de la interfaz + plugins + ajuste manual). Se graba directo al disco, en la carpeta Audio/ del proyecto.
@@ -48,7 +59,7 @@ build\WorshipDAW_artefacts\Release\"Worship DAW.exe"
 - ASIO en Windows: requiere el SDK de Steinberg y aceptar su licencia; hoy se usa WASAPI. Activar con `JUCE_ASIO=1` y la ruta del SDK.
 - Escaneo de plugins en un proceso separado. Hoy, si un plugin se cuelga al escanearlo, queda marcado y se salta la próxima vez.
 - Firma y notarización en Mac (cuenta de Apple Developer) y firma de código en Windows.
-- Automatización, envíos/buses, carpetas de pistas, superficies Mackie Control y exportar a MP3.
+- Carpetas de pistas, superficies Mackie Control, exportar a MP3 y automatización con curvas (hoy los tramos son rectos).
 
 ## Código
 

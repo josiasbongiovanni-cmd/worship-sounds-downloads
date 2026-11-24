@@ -709,6 +709,22 @@ Project makeProject (Template tmpl, const juce::String& name, double bpm, const 
     if (tmpl == Template::multitracks)
         p.clickOutPair = 0;
 
+    // Bus de reverb para las voces (con la "Reverb básica" incluida), como una plantilla típica de REAPER.
+    if (tmpl == Template::fullBand || tmpl == Template::acoustic || tmpl == Template::vocals)
+    {
+        std::vector<juce::Uuid> voices;
+        for (auto& t : p.tracks)
+            if (t.name.startsWith ("Voz") || t.name.startsWith ("Coro")) voices.push_back (t.id);
+        auto& bus = addTrack (p, "Reverb", TrackRole::bus, "slate");
+        PluginSlot reverb;
+        reverb.name = juce::String::fromUTF8 ("Reverb básica");
+        reverb.manufacturer = "Worship DAW";
+        reverb.descriptionXml = "internal:reverb";
+        bus.inserts.push_back (reverb);
+        const auto busId = bus.id;
+        for (auto& id : voices) addSend (p, id, busId, -14.0);
+    }
+
     if (tmpl != Template::empty && tmpl != Template::vocals)
     {
         const std::pair<SectionKind, int> plan[] = { { SectionKind::intro, 4 }, { SectionKind::verse, 8 }, { SectionKind::preChorus, 4 },

@@ -6,6 +6,7 @@
 #include "Inspector.h"
 #include "PianoRoll.h"
 #include "HomeView.h"
+#include "ParamWatcher.h"
 
 namespace wdaw::ui
 {
@@ -67,6 +68,7 @@ private:
     juce::TooltipWindow tooltips { this, 600 };
 
     std::unique_ptr<Session> session;
+    std::unique_ptr<ParamWatcher> paramWatcher;
     std::unique_ptr<Context> ctx;
     std::unique_ptr<HomeView> home;
     std::unique_ptr<TransportBar> transport;

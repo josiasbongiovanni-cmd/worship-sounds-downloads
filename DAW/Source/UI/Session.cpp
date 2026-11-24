@@ -196,12 +196,15 @@ Session::Session (AudioEngine& e, PluginManager& p, MidiLearn& ml, juce::File f,
     midiLearn.loadProject (folder);
     refreshLiveMidi();
     startTimer (200);
+    writeTimer = std::make_unique<juce::TimedCallback> ([this] { writeTick(); });
+    writeTimer->startTimerHz (30);
 }
 
 Session::~Session()
 {
     *alive = false;
     stopTimer();
+    writeTimer.reset();
     if (isRecording()) finishRecording();
     engine.stop();
     saveNow (true);
@@ -240,6 +243,7 @@ void Session::beginGesture()
 
 void Session::undo()
 {
+    finishWriters();
     if (undoStack.empty()) return;
     redoStack.push_back (proj);
     auto p = undoStack.back();
@@ -313,6 +317,7 @@ void Session::play()
 
 void Session::stop()
 {
+    finishWriters();
     if (isRecording()) finishRecording();
     engine.stop();
     engine.seek (editCursor);    // como REAPER: al detener vuelve al cursor de edición
@@ -516,6 +521,7 @@ juce::Uuid Session::addTrack (TrackRole role)
         {
             case TrackRole::guide:      name = "Guía"_u; break;
             case TrackRole::instrument: name = "Instrumento " + juce::String (count + 1); break;
+            case TrackRole::bus:        name = "Bus " + juce::String (count + 1); break;
             default:                    name = "Audio " + juce::String ((int) p.tracks.size() + 1); break;
         }
         auto& t = edit::addTrack (p, name, role);
@@ -536,6 +542,262 @@ void Session::removeTrack (const juce::Uuid& id)
 void Session::updateTrack (const juce::Uuid& id, const std::function<void (Track&)>& fn, bool undoable)
 {
     edit ([&] (Project& p) { if (auto* t = p.findTrack (id)) fn (*t); }, undoable);
+}
+
+//==============================================================================
+std::optional<juce::Uuid> Session::addSend (const juce::Uuid& from, const juce::Uuid& bus, bool preFader)
+{
+    if (! proj.canRouteTo (from, bus)) { if (showError) showError (juce::String::fromUTF8 ("Ese envío crearía un bucle de señal.")); return {}; }
+    std::optional<juce::Uuid> id;
+    edit ([&] (Project& p) { id = edit::addSend (p, from, bus, preFader ? 0.0 : -12.0, preFader); });
+    return id;
+}
+
+void Session::removeSend (const juce::Uuid& track, const juce::Uuid& send)
+{
+    edit ([&] (Project& p) { edit::removeSend (p, track, send); });
+}
+
+void Session::setOutputBus (const juce::Uuid& track, const juce::Uuid& bus)
+{
+    if (! bus.isNull() && ! proj.canRouteTo (track, bus)) { if (showError) showError (juce::String::fromUTF8 ("Esa salida crearía un bucle de señal.")); return; }
+    edit ([&] (Project& p) { edit::setOutputBus (p, track, bus); });
+}
+
+juce::Uuid Session::createBusFor (const std::vector<juce::Uuid>& tracks, bool asSend, juce::String name)
+{
+    juce::Uuid busId;
+    edit ([&] (Project& p)
+    {
+        int count = 0;
+        for (auto& t : p.tracks) if (t.isBus()) ++count;
+        auto& bus = edit::addTrack (p, name.isNotEmpty() ? name : "Bus " + juce::String (count + 1), TrackRole::bus, "slate");
+        busId = bus.id;
+        // El bus queda justo después de la última pista que lo alimenta.
+        int last = -1;
+        for (auto& id : tracks) last = juce::jmax (last, p.trackIndex (id));
+        if (last >= 0) edit::moveTrack (p, busId, last + 1);
+        for (auto& id : tracks)
+            if (asSend) edit::addSend (p, id, busId);
+            else edit::setOutputBus (p, id, busId);
+    });
+    selectTrack (busId);
+    return busId;
+}
+
+//==============================================================================
+double Session::staticValue (const Track& t, const AutomationTarget& target) const
+{
+    switch (target.kind)
+    {
+        case AutomationTarget::Kind::volume: return t.volumeDb;
+        case AutomationTarget::Kind::pan:    return t.pan;
+        case AutomationTarget::Kind::sendLevel:
+            for (auto& s : t.sends) if (s.id == target.ref) return s.levelDb;
+            return target.defaultValue();
+        case AutomationTarget::Kind::pluginParam:
+            if (auto p = engine.findPlugin (target.ref))
+                if (target.param >= 0 && target.param < p->processor->getParameters().size())
+                    return p->processor->getParameters()[target.param]->getValue();
+            return target.defaultValue();
+    }
+    return 0;
+}
+
+double Session::effectiveValue (const Track& t, const AutomationTarget& target) const
+{
+    if (auto* lane = t.playingLane (target)) return lane->valueAt (playhead());
+    return staticValue (t, target);
+}
+
+void Session::applyStatic (Track& t, const AutomationTarget& target, double v) const
+{
+    switch (target.kind)
+    {
+        case AutomationTarget::Kind::volume: t.volumeDb = v; break;
+        case AutomationTarget::Kind::pan:    t.pan = v; break;
+        case AutomationTarget::Kind::sendLevel:
+            for (auto& s : t.sends) if (s.id == target.ref) s.levelDb = v;
+            break;
+        case AutomationTarget::Kind::pluginParam: break;   // el estado vive en el plugin
+    }
+}
+
+Session::Writer* Session::findWriter (const juce::Uuid& track, const AutomationTarget& target)
+{
+    for (auto& w : writers) if (w.track == track && w.target == target) return &w;
+    return nullptr;
+}
+
+bool Session::isWriting (const juce::Uuid& track) const
+{
+    return std::any_of (writers.begin(), writers.end(), [&] (auto& w) { return w.track == track; });
+}
+
+void Session::showLane (const juce::Uuid& track, const AutomationTarget& target)
+{
+    auto* t = proj.findTrack (track);
+    if (t == nullptr) return;
+    const auto initial = staticValue (*t, target);
+    updateTrack (track, [&] (Track& x)
+    {
+        auto& lane = edit::automation::ensureLane (x, target, initial);
+        if (lane.target.paramName.isEmpty()) lane.target.paramName = target.paramName;
+    });
+}
+
+void Session::touchBegin (const juce::Uuid& track, const AutomationTarget& target)
+{
+    beginGesture();
+    auto* t = proj.findTrack (track);
+    if (t == nullptr) return;
+    const bool writeMode = t->automationMode == AutomationMode::touch || t->automationMode == AutomationMode::latch;
+    if (! writeMode || ! isPlaying()) return;
+    if (auto* w = findWriter (track, target)) { w->held = true; return; }
+    const auto now = playhead();
+    const auto current = effectiveValue (*t, target);
+    edit ([&] (Project& p)
+    {
+        auto& tr = *p.findTrack (track);
+        auto& lane = edit::automation::ensureLane (tr, target, current);
+        // Se conserva la curva anterior hasta acá; desde ahora manda lo que se toca.
+        edit::automation::addPoint (lane, now, lane.valueAt (now));
+        lane.writing = true;
+        applyStatic (tr, target, current);
+    }, false);
+    writers.push_back ({ track, target, now, current, true, juce::Time::getMillisecondCounter() });
+}
+
+void Session::touchEnd (const juce::Uuid& track, const AutomationTarget& target)
+{
+    auto* w = findWriter (track, target);
+    if (w == nullptr) return;
+    w->held = false;
+    auto* t = proj.findTrack (track);
+    if (t != nullptr && t->automationMode == AutomationMode::touch)
+    {
+        // Touch: al soltar, el carril vuelve a mandar desde aquí.
+        const auto writer = *w;
+        writers.erase (writers.begin() + (w - writers.data()));
+        const auto now = playhead();
+        edit ([&] (Project& p)
+        {
+            if (auto* tr = p.findTrack (track))
+                if (auto* lane = tr->findLane (target))
+                {
+                    if (now > writer.lastBeat) edit::automation::writeValue (*lane, writer.lastBeat, now, writer.value);
+                    lane->writing = false;
+                    edit::automation::simplify (*lane, target.kind == AutomationTarget::Kind::volume || target.kind == AutomationTarget::Kind::sendLevel ? 0.05 : 0.002);
+                }
+        }, false);
+    }
+}
+
+void Session::setControl (const juce::Uuid& track, const AutomationTarget& target, double value)
+{
+    auto* t = proj.findTrack (track);
+    if (t == nullptr) return;
+    value = juce::jlimit (target.minValue(), target.maxValue(), value);
+
+    if (auto* w = findWriter (track, target))
+    {
+        const auto now = playhead();
+        const auto from = w->lastBeat;
+        w->value = value;
+        w->lastBeat = now;
+        w->lastChange = juce::Time::getMillisecondCounter();
+        edit ([&] (Project& p)
+        {
+            auto& tr = *p.findTrack (track);
+            applyStatic (tr, target, value);
+            if (auto* lane = tr.findLane (target))
+            {
+                if (now >= from) edit::automation::writeValue (*lane, from, now, value);
+                else edit::automation::addPoint (*lane, now, value);   // el loop volvió al inicio
+            }
+        }, false);
+        return;
+    }
+
+    // Sin escritura en curso. Detenido y con carril: se edita el punto en el cursor (no hay que buscarlo en el carril).
+    if (! isPlaying() && t->playingLane (target) != nullptr)
+    {
+        const auto at = editCursor;
+        edit ([&] (Project& p)
+        {
+            auto& tr = *p.findTrack (track);
+            applyStatic (tr, target, value);
+            if (auto* lane = tr.findLane (target)) edit::automation::addPoint (*lane, at, value);
+        }, false);
+        return;
+    }
+
+    // Touch/Latch sin gesto explícito (p. ej. un controlador MIDI): empezar a escribir.
+    const bool writeMode = t->automationMode == AutomationMode::touch || t->automationMode == AutomationMode::latch;
+    if (writeMode && isPlaying() && target.kind != AutomationTarget::Kind::pluginParam)
+    {
+        touchBegin (track, target);
+        if (auto* w = findWriter (track, target)) w->held = false;
+        setControl (track, target, value);
+        return;
+    }
+
+    if (target.kind != AutomationTarget::Kind::pluginParam)
+        edit ([&] (Project& p) { if (auto* tr = p.findTrack (track)) applyStatic (*tr, target, value); }, false);
+}
+
+void Session::writeTick()
+{
+    const bool playingNow = isPlaying();
+    if (! playingNow)
+    {
+        if (wasPlayingForWriters) finishWriters();
+        wasPlayingForWriters = false;
+        return;
+    }
+    wasPlayingForWriters = true;
+    if (writers.empty()) return;
+
+    const auto now = playhead();
+    const auto ms = juce::Time::getMillisecondCounter();
+    std::vector<Writer> ended;
+    edit ([&] (Project& p)
+    {
+        for (auto& w : writers)
+        {
+            auto* tr = p.findTrack (w.track);
+            auto* lane = tr != nullptr ? tr->findLane (w.target) : nullptr;
+            if (lane == nullptr) continue;
+            // Mientras se sostiene (o en latch), se sigue escribiendo el último valor bajo el cursor.
+            if (now >= w.lastBeat) edit::automation::writeValue (*lane, w.lastBeat, now, w.value);
+            else edit::automation::addPoint (*lane, now, w.value);
+            w.lastBeat = now;
+            // Touch sin gesto (controlador MIDI): termina tras medio segundo sin cambios.
+            if (tr->automationMode == AutomationMode::touch && ! w.held && ms - w.lastChange > 500) ended.push_back (w);
+        }
+    }, false);
+    for (auto& w : ended)
+    {
+        if (auto* x = findWriter (w.track, w.target)) x->held = false;
+        touchEnd (w.track, w.target);
+    }
+}
+
+void Session::finishWriters()
+{
+    if (writers.empty()) return;
+    auto done = writers;
+    writers.clear();
+    edit ([&] (Project& p)
+    {
+        for (auto& w : done)
+            if (auto* tr = p.findTrack (w.track))
+                if (auto* lane = tr->findLane (w.target))
+                {
+                    lane->writing = false;
+                    edit::automation::simplify (*lane, w.target.kind == AutomationTarget::Kind::volume || w.target.kind == AutomationTarget::Kind::sendLevel ? 0.05 : 0.002);
+                }
+    }, false);
 }
 
 void Session::moveTrack (const juce::Uuid& id, int newIndex)
@@ -655,8 +917,8 @@ void Session::handleMidiAction (const MidiMapping& m, float v)
     auto faderDb = [] (float pos) { return pos <= 0.0005f ? Decibels::silence : Decibels::silence + std::pow (pos, 1.0 / 2.2) * 66.0; };
     switch (m.target)
     {
-        case T::trackVolume:    track ([&] (Track& t) { t.volumeDb = std::round (faderDb (v) * 10) / 10; }); break;
-        case T::trackPan:       track ([&] (Track& t) { t.pan = std::round ((v * 2 - 1) * 100) / 100; }); break;
+        case T::trackVolume:    if (proj.findTrack (m.trackId)) setControl (m.trackId, { AutomationTarget::Kind::volume }, std::round (faderDb (v) * 10) / 10); break;
+        case T::trackPan:       if (proj.findTrack (m.trackId)) setControl (m.trackId, { AutomationTarget::Kind::pan }, std::round ((v * 2 - 1) * 100) / 100); break;
         case T::trackMute:      track ([] (Track& t) { t.muted = ! t.muted; }); break;
         case T::trackSolo:      track ([] (Track& t) { t.solo = ! t.solo; }); break;
         case T::trackArm:       track ([] (Track& t) { t.armed = ! t.armed; }); break;

@@ -83,5 +83,11 @@ void drawMeter (juce::Graphics&, juce::Rectangle<float>, float level, bool verti
 /** Menús de pista compartidos (cabecera y mezclador): entrada, monitoreo, salida directa, Aprender MIDI. */
 void addTrackInputMenus (juce::PopupMenu&, Session&, const Track&);
 void addMidiLearnMenu (juce::PopupMenu&, Session&, const Track&);
+/** Salida (Master / buses / salidas directas) y envíos a buses. */
+void addRoutingMenu (juce::PopupMenu&, Session&, const Track&);
+/** Modo de automatización y carriles para mostrar (volumen, paneo, envíos, parámetros de plugins). */
+void addAutomationMenu (juce::PopupMenu&, Session&, const Track&);
+/** Nombre corto de la salida de una pista ("Master", "→ Voces", "Salidas 3/4"). */
+juce::String outputLabel (const Project&, const Track&);
 
 } // namespace wdaw::ui

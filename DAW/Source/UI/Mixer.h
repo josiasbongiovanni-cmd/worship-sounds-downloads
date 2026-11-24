@@ -9,7 +9,7 @@ namespace wdaw::ui
 class Fader : public juce::Component
 {
 public:
-    std::function<void()> onBegin;
+    std::function<void()> onBegin, onEnd;
     std::function<void (double)> onChange;
     double db = 0;
     float level = 0;
@@ -17,6 +17,8 @@ public:
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    bool dragging = false;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 private:

@@ -34,11 +34,15 @@ Inspector::Inspector (Context& c) : ctx (c)
     }
     volume.setRange (0, 1);
     volume.textFromValueFunction = [] (double v) { return formatDb (faderDb (v)) + " dB"; };
-    volume.onValueChange = [this] { if (! updating) { const auto db = std::round (faderDb (volume.getValue()) * 10) / 10; ctx.session.updateTrack (ctx.session.selectedTrack, [db] (Track& t) { t.volumeDb = db; }, false); } };
+    volume.onDragStart = [this] { ctx.session.touchBegin (ctx.session.selectedTrack, { AutomationTarget::Kind::volume }); };
+    volume.onDragEnd = [this] { ctx.session.touchEnd (ctx.session.selectedTrack, { AutomationTarget::Kind::volume }); };
+    volume.onValueChange = [this] { if (! updating) { const auto db = std::round (faderDb (volume.getValue()) * 10) / 10; ctx.session.setControl (ctx.session.selectedTrack, { AutomationTarget::Kind::volume }, db); } };
     pan.setRange (-1, 1, 0.01);
     pan.setDoubleClickReturnValue (true, 0);
     pan.textFromValueFunction = [] (double v) { return formatPan (v); };
-    pan.onValueChange = [this] { if (! updating) { const auto v = pan.getValue(); ctx.session.updateTrack (ctx.session.selectedTrack, [v] (Track& t) { t.pan = v; }, false); } };
+    pan.onDragStart = [this] { ctx.session.touchBegin (ctx.session.selectedTrack, { AutomationTarget::Kind::pan }); };
+    pan.onDragEnd = [this] { ctx.session.touchEnd (ctx.session.selectedTrack, { AutomationTarget::Kind::pan }); };
+    pan.onValueChange = [this] { if (! updating) ctx.session.setControl (ctx.session.selectedTrack, { AutomationTarget::Kind::pan }, pan.getValue()); };
     bpm.setRange (20, 300, 1);
     bpm.textFromValueFunction = [] (double v) { return juce::String ((int) v) + " BPM"; };
     bpm.onValueChange = [this] { if (! updating) { const auto v = bpm.getValue(); ctx.session.edit ([v] (Project& p) { edit::setTempo (p, v); }, false); } };
@@ -64,15 +68,56 @@ Inspector::Inspector (Context& c) : ctx (c)
     };
 
     role.addItem ("Audio", 1); role.addItem (juce::String::fromUTF8 ("Guía"), 2); role.addItem ("Instrumento (MIDI)", 3);
+    role.addItem ("Bus (submezcla o efectos)", 4);
     role.onChange = [this]
     {
         if (updating) return;
-        const auto r = role.getSelectedId() == 3 ? TrackRole::instrument : role.getSelectedId() == 2 ? TrackRole::guide : TrackRole::audio;
+        const auto id = role.getSelectedId();
+        const auto r = id == 4 ? TrackRole::bus : id == 3 ? TrackRole::instrument : id == 2 ? TrackRole::guide : TrackRole::audio;
+        if (auto* t = ctx.session.project().findTrack (ctx.session.selectedTrack))
+        {
+            if (r == TrackRole::bus && (! t->clips.empty() || ! t->midiClips.empty()))
+            {
+                if (ctx.session.showError) ctx.session.showError (juce::String::fromUTF8 ("Una pista con ítems no puede ser un bus. Crea un bus nuevo con + Pista › Bus."));
+                update();
+                return;
+            }
+            // Un bus no puede mandarse a sí mismo ni recibir de algo a lo que alimenta: se revisa al cambiar.
+        }
         ctx.session.updateTrack (ctx.session.selectedTrack, [r] (Track& t)
         {
             t.role = r;
             if (r == TrackRole::instrument && ! t.instrument) t.instrument = PluginManager::defaultInstrumentSlot();
+            if (r == TrackRole::bus) { t.armed = false; t.input.kind = TrackInput::Kind::off; }
         });
+    };
+    for (auto m : { AutomationMode::off, AutomationMode::read, AutomationMode::touch, AutomationMode::latch })
+        automationMode.addItem (juce::String::fromUTF8 ("Automatización: ") + displayName (m), (int) m + 1);
+    automationMode.onChange = [this]
+    {
+        if (updating) return;
+        const auto m = (AutomationMode) (automationMode.getSelectedId() - 1);
+        ctx.session.updateTrack (ctx.session.selectedTrack, [m] (Track& t) { t.automationMode = m; });
+    };
+    routing.setButtonText (juce::String::fromUTF8 ("Envíos y salida…"));
+    routing.onClick = [this]
+    {
+        if (auto* t = ctx.session.project().findTrack (ctx.session.selectedTrack))
+        {
+            juce::PopupMenu m;
+            addRoutingMenu (m, ctx.session, *t);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&routing));
+        }
+    };
+    automationLanes.setButtonText ("Carriles…"_u);
+    automationLanes.onClick = [this]
+    {
+        if (auto* t = ctx.session.project().findTrack (ctx.session.selectedTrack))
+        {
+            juce::PopupMenu m;
+            addAutomationMenu (m, ctx.session, *t);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&automationLanes));
+        }
     };
     monitor.addItem ("Monitoreo: apagado", 1); monitor.addItem ("Monitoreo: encendido", 2); monitor.addItem (juce::String::fromUTF8 ("Monitoreo: automático"), 3);
     monitor.onChange = [this]
@@ -94,8 +139,17 @@ Inspector::Inspector (Context& c) : ctx (c)
     output.onChange = [this]
     {
         if (updating) return;
-        const auto pair = output.getSelectedId() <= 1 ? 0 : output.getSelectedId();
-        ctx.session.updateTrack (ctx.session.selectedTrack, [pair] (Track& t) { t.directOutPair = pair; });
+        const auto id = output.getSelectedId();
+        const auto track = ctx.session.selectedTrack;
+        if (id >= 5000)
+        {
+            const auto buses = ctx.session.project().buses();
+            if (id - 5000 < (int) buses.size()) ctx.session.setOutputBus (track, buses[(size_t) (id - 5000)]->id);
+            update();
+            return;
+        }
+        const auto pair = id <= 1 ? 0 : id;
+        ctx.session.updateTrack (track, [pair] (Track& t) { t.directOutPair = pair; t.outputBus = juce::Uuid::null(); });
     };
     armed.onClick = [this] { ctx.session.updateTrack (ctx.session.selectedTrack, [this] (Track& t) { t.armed = armed.getToggleState(); }); };
     eqOn.onClick = [this] { ctx.session.updateTrack (ctx.session.selectedTrack, [this] (Track& t) { t.eq.enabled = eqOn.getToggleState(); }); };
@@ -144,6 +198,7 @@ void Inspector::update()
     auto& s = ctx.session;
     auto& p = s.project();
     for (auto* comp : std::initializer_list<juce::Component*> { &trackName, &role, &armed, &input, &monitor, &output, &low, &mid, &high, &eqOn, &volume, &pan, &chooseInstrument,
+                                                                &automationMode, &routing, &automationLanes,
                                                                 &songName, &bpm, &keyBox, &meterBox, &clickOn, &clickVolume, &countIn, &clickOut })
         removeChildComponent (comp);
     for (auto* b : addSectionButtons) removeChildComponent (b);
@@ -152,11 +207,13 @@ void Inspector::update()
     {
         if (auto* t = p.findTrack (s.selectedTrack))
         {
-            for (auto* comp : std::initializer_list<juce::Component*> { &trackName, &role, &output, &volume, &pan })
+            for (auto* comp : std::initializer_list<juce::Component*> { &trackName, &role, &output, &volume, &pan, &automationMode, &routing, &automationLanes })
                 addAndMakeVisible (comp);
             if (! trackName.hasKeyboardFocus (true)) trackName.setText (t->name, false);
-            role.setSelectedId (t->role == TrackRole::instrument ? 3 : t->role == TrackRole::guide ? 2 : 1, juce::dontSendNotification);
+            role.setSelectedId (t->isBus() ? 4 : t->role == TrackRole::instrument ? 3 : t->role == TrackRole::guide ? 2 : 1, juce::dontSendNotification);
+            automationMode.setSelectedId ((int) t->automationMode + 1, juce::dontSendNotification);
             if (t->isInstrument()) addAndMakeVisible (chooseInstrument);
+            else if (t->isBus()) {}
             else
             {
                 for (auto* comp : std::initializer_list<juce::Component*> { &armed, &input, &monitor, &low, &mid, &high, &eqOn })
@@ -176,11 +233,20 @@ void Inspector::update()
             armed.setToggleState (t->armed, juce::dontSendNotification);
             output.clear (juce::dontSendNotification);
             output.addItem ("Salida: Master", 1);
+            int selected = t->directOutPair >= 2 ? t->directOutPair : 1;
+            const auto buses = p.buses();
+            for (int b = 0; b < (int) buses.size(); ++b)
+            {
+                if (buses[(size_t) b]->id == t->id) continue;
+                output.addItem (juce::String::fromUTF8 ("Salida: → ") + buses[(size_t) b]->name, 5000 + b);
+                output.setItemEnabled (5000 + b, p.canRouteTo (t->id, buses[(size_t) b]->id) || t->outputBus == buses[(size_t) b]->id);
+                if (t->outputBus == buses[(size_t) b]->id && t->directOutPair < 2) selected = 5000 + b;
+            }
             for (int pr = 2; pr <= s.engine.numOutputChannels() / 2; ++pr)
                 output.addItem ("Salidas " + juce::String (pr * 2 - 1) + "/" + juce::String (pr * 2) + " (directo)", pr);
-            output.setSelectedId (t->directOutPair >= 2 ? t->directOutPair : 1, juce::dontSendNotification);
-            volume.setValue (faderPosition (t->volumeDb), juce::dontSendNotification);
-            pan.setValue (t->pan, juce::dontSendNotification);
+            output.setSelectedId (selected, juce::dontSendNotification);
+            volume.setValue (faderPosition (s.effectiveValue (*t, { AutomationTarget::Kind::volume })), juce::dontSendNotification);
+            pan.setValue (s.effectiveValue (*t, { AutomationTarget::Kind::pan }), juce::dontSendNotification);
             volume.setColour (juce::Slider::trackColourId, colours::named (t->colour));
             for (auto* k : { &low, &mid, &high }) k->setColour (juce::Slider::rotarySliderFillColourId, colours::named (t->colour));
         }
@@ -247,10 +313,16 @@ void Inspector::layoutTrack (juce::Rectangle<int> r)
         r.removeFromTop (22);
     }
     output.setBounds (r.removeFromTop (28));
-    r.removeFromTop (12);
+    r.removeFromTop (6);
+    routing.setBounds (r.removeFromTop (26));
+    r.removeFromTop (22);
     volume.setBounds (r.removeFromTop (26));
     r.removeFromTop (6);
     pan.setBounds (r.removeFromTop (26));
+    r.removeFromTop (22);
+    automationMode.setBounds (r.removeFromTop (28));
+    r.removeFromTop (6);
+    automationLanes.setBounds (r.removeFromTop (26));
 }
 
 void Inspector::layoutSong (juce::Rectangle<int> r)
@@ -349,6 +421,7 @@ void Inspector::paint (juce::Graphics& g)
                 g.drawText (k == &low ? "Graves" : k == &mid ? "Medios" : "Agudos", k->getBounds().translated (0, 46).withHeight (12).expanded (20, 0), juce::Justification::centred);
         }
         label (volume, "VOLUMEN Y PANEO");
+        label (automationMode, juce::String::fromUTF8 ("AUTOMATIZACIÓN"));
     }
     else if (tab == 1)
     {

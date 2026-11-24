@@ -12,7 +12,18 @@ class TrackHeader : public juce::Component
 public:
     TrackHeader (Context& c, const juce::Uuid& id) : ctx (c), trackId (id)
     {
-        for (auto* b : { &muteButton, &soloButton, &armButton }) addAndMakeVisible (*b);
+        for (auto* b : { &muteButton, &soloButton, &armButton, &autoButton }) addAndMakeVisible (*b);
+        autoButton.setTooltip (juce::String::fromUTF8 ("Automatización: modo y carriles"));
+        autoButton.onClick = [this]
+        {
+            autoButton.setToggleState (isWriteMode(), juce::dontSendNotification);
+            if (auto* t = track())
+            {
+                juce::PopupMenu m;
+                addAutomationMenu (m, ctx.session, *t);
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&autoButton));
+            }
+        };
         muteButton.onClick = [this] { ctx.session.updateTrack (trackId, [] (Track& t) { t.muted = ! t.muted; }); };
         soloButton.onClick = [this] { ctx.session.updateTrack (trackId, [] (Track& t) { t.solo = ! t.solo; }); };
         armButton.onClick  = [this] { ctx.session.updateTrack (trackId, [] (Track& t) { t.armed = ! t.armed; }); };
@@ -22,17 +33,23 @@ public:
         volume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         volume.setRange (0.0, 1.0);
         volume.setDoubleClickReturnValue (true, faderPosition (0));
-        volume.onDragStart = [this] { ctx.session.beginGesture(); };
+        volume.onDragStart = [this] { ctx.session.touchBegin (trackId, { AutomationTarget::Kind::volume }); };
+        volume.onDragEnd = [this] { ctx.session.touchEnd (trackId, { AutomationTarget::Kind::volume }); };
         volume.onValueChange = [this]
         {
             const auto db = std::round (faderDb (volume.getValue()) * 10) / 10;
-            ctx.session.updateTrack (trackId, [db] (Track& t) { t.volumeDb = db; }, false);
+            ctx.session.setControl (trackId, { AutomationTarget::Kind::volume }, db);
         };
         addAndMakeVisible (volume);
         update();
     }
 
     const Track* track() const { return ctx.session.project().findTrack (trackId); }
+    bool isWriteMode() const
+    {
+        auto* t = track();
+        return t != nullptr && (t->automationMode == AutomationMode::touch || t->automationMode == AutomationMode::latch);
+    }
 
     void update()
     {
@@ -41,22 +58,37 @@ public:
         muteButton.setToggleState (t->muted, juce::dontSendNotification);
         soloButton.setToggleState (t->solo, juce::dontSendNotification);
         armButton.setToggleState (t->armed, juce::dontSendNotification);
+        armButton.setVisible (! t->isBus());
+        autoButton.setToggleState (isWriteMode(), juce::dontSendNotification);
+        autoButton.onColour = t->automationMode == AutomationMode::latch ? colours::record : colours::accent2;
+        autoButton.setTooltip (juce::String::fromUTF8 ("Automatización: ") + displayName (t->automationMode));
         volume.setColour (juce::Slider::trackColourId, colours::named (t->colour));
-        volume.setValue (faderPosition (t->volumeDb), juce::dontSendNotification);
-        volume.setTooltip ("Volumen: " + formatDb (t->volumeDb) + " dB");
+        refreshValues();
+        resized();
         repaint();
     }
+
+    /** Durante la reproducción el fader sigue a la automatización (como en REAPER). */
+    void refreshValues()
+    {
+        auto* t = track();
+        if (t == nullptr || volume.isMouseButtonDown()) return;
+        shownDb = ctx.session.effectiveValue (*t, { AutomationTarget::Kind::volume });
+        volume.setValue (faderPosition (shownDb), juce::dontSendNotification);
+        volume.setTooltip ("Volumen: " + formatDb (shownDb) + " dB");
+    }
+    double shownDb = 0;
 
     void resized() override
     {
         auto r = getLocalBounds().reduced (12, 8).withTrimmedLeft (4);
         r.removeFromTop (24);
         auto row = r.removeFromTop (22);
+        auto* t = track();
         muteButton.setBounds (row.removeFromLeft (22)); row.removeFromLeft (4);
         soloButton.setBounds (row.removeFromLeft (22)); row.removeFromLeft (4);
-        armButton.setBounds (row.removeFromLeft (22)); row.removeFromLeft (6);
-        auto* t = track();
-        if (t != nullptr && t->armed) row.removeFromLeft (44);
+        if (t == nullptr || ! t->isBus()) { armButton.setBounds (row.removeFromLeft (22)); row.removeFromLeft (4); }
+        autoButton.setBounds (row.removeFromLeft (22)); row.removeFromLeft (8);
         row.removeFromRight (40);
         volume.setBounds (row);
     }
@@ -76,13 +108,39 @@ public:
         g.fillRoundedRectangle (strip, 2);
 
         auto top = getLocalBounds().reduced (12, 8).withTrimmedLeft (4).removeFromTop (22).toFloat();
-        if (t->isInstrument() || t->role == TrackRole::guide)
+        if (t->isInstrument() || t->role == TrackRole::guide || t->isBus())
         {
-            auto icon = IconButton::path (t->isInstrument() ? IconButton::Icon::piano : IconButton::Icon::guide,
+            auto icon = IconButton::path (t->isInstrument() ? IconButton::Icon::piano : t->isBus() ? IconButton::Icon::mixer : IconButton::Icon::guide,
                                           top.removeFromLeft (14).withSizeKeepingCentre (12, 10));
             g.setColour (colour);
             g.strokePath (icon, juce::PathStrokeType (1.2f));
             top.removeFromLeft (5);
+        }
+        if (t->armed)
+        {
+            // Armada: entrada (y monitoreo) arriba a la derecha, para que el volumen tenga lugar
+            auto info = top.removeFromRight (52);
+            top.removeFromRight (4);
+            g.setColour (colours::record);
+            g.setFont (font (10, true));
+            g.drawText (t->isInstrument() ? juce::String ("MIDI") : t->input.shortName(), info, juce::Justification::centredRight);
+            if (t->monitor != MonitorMode::off && ! t->isInstrument())
+            {
+                g.setColour (colours::solo);
+                g.fillPath (IconButton::path (IconButton::Icon::speaker, info.removeFromLeft (11).withSizeKeepingCentre (10, 9)));
+            }
+        }
+        else if (t->directOutPair >= 2 || ! t->outputBus.isNull() || ! t->sends.empty())
+        {
+            juce::String label;
+            if (t->directOutPair >= 2 || ! t->outputBus.isNull()) label = outputLabel (ctx.session.project(), *t);
+            if (! t->sends.empty())
+                label << (label.isEmpty() ? "" : "  ") << juce::String ((int) t->sends.size()) << (t->sends.size() == 1 ? juce::String::fromUTF8 (" envío") : juce::String::fromUTF8 (" envíos"));
+            g.setFont (font (10));
+            const auto w = juce::jmin (90.0f, (float) juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), label) + 4);
+            g.setColour (colours::text3);
+            g.drawText (label, top.removeFromRight (w), juce::Justification::centredRight, true);
+            top.removeFromRight (4);
         }
         if (! t->inserts.empty())
         {
@@ -100,22 +158,9 @@ public:
         auto row = getLocalBounds().reduced (12, 8).withTrimmedLeft (4);
         row.removeFromTop (24);
         auto controls = row.removeFromTop (22);
-        if (t->armed)
-        {
-            auto info = controls.withTrimmedLeft (22 * 3 + 14).removeFromLeft (44).toFloat();
-            if (t->monitor != MonitorMode::off && ! t->isInstrument())
-            {
-                g.setColour (colours::solo);
-                g.fillPath (IconButton::path (IconButton::Icon::speaker, info.removeFromLeft (11).withSizeKeepingCentre (10, 9)));
-                info.removeFromLeft (3);
-            }
-            g.setColour (colours::record);
-            g.setFont (font (10, true));
-            g.drawText (t->isInstrument() ? juce::String ("MIDI") : t->input.shortName(), info, juce::Justification::centredLeft);
-        }
         g.setColour (colours::text3);
         g.setFont (mono (10));
-        g.drawText (formatDb (t->volumeDb), controls.removeFromRight (38), juce::Justification::centredRight);
+        g.drawText (formatDb (shownDb), controls.removeFromRight (38), juce::Justification::centredRight);
 
         auto meter = row.removeFromTop (8).withTrimmedTop (5).toFloat();
         drawMeter (g, meter.withHeight (3), ctx.meters.track (trackId), false);
@@ -142,9 +187,13 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (e.eventComponent != this || dragStartIndex < 0 || e.getDistanceFromDragStartY() == 0) return;
-        const auto rows = (int) std::round ((float) e.getDistanceFromDragStartY() / (float) getHeight());
-        const auto target = juce::jlimit (0, (int) ctx.session.project().tracks.size() - 1, dragStartIndex + rows);
+        if (e.eventComponent != this || dragStartIndex < 0 || e.getDistanceFromDragStartY() == 0 || getParentComponent() == nullptr) return;
+        auto* arr = findParentComponentOfClass<Arrangement>();
+        if (arr == nullptr) return;
+        const auto y = (float) e.getEventRelativeTo (getParentComponent()).position.y;
+        auto under = arr->trackIndexAt (y);
+        if (under < 0) under = y < 0 ? 0 : (int) ctx.session.project().tracks.size() - 1;
+        const auto target = juce::jlimit (0, (int) ctx.session.project().tracks.size() - 1, under);
         if (target != ctx.session.project().trackIndex (trackId))
             ctx.session.edit ([&] (Project& p) { edit::moveTrack (p, trackId, target); }, ! movedDuringDrag);
         movedDuringDrag = true;
@@ -207,7 +256,11 @@ public:
         }
         m.addItem ("Agregar plugin de efecto…"_u, [this] { if (ctx.choosePlugin) ctx.choosePlugin (trackId, false); });
         m.addSeparator();
-        addTrackInputMenus (m, ctx.session, *t);
+        if (t->isBus()) addRoutingMenu (m, ctx.session, *t);
+        else addTrackInputMenus (m, ctx.session, *t);
+        juce::PopupMenu automation;
+        addAutomationMenu (automation, ctx.session, *t);
+        m.addSubMenu (juce::String::fromUTF8 ("Automatización"), automation);
         m.addSeparator();
         addMidiLearnMenu (m, ctx.session, *t);
         m.addSeparator();
@@ -217,10 +270,101 @@ public:
 
     Context& ctx;
     juce::Uuid trackId;
-    PillButton muteButton { "M", colours::mute }, soloButton { "S", colours::solo }, armButton { "R", colours::record };
+    PillButton muteButton { "M", colours::mute }, soloButton { "S", colours::solo }, armButton { "R", colours::record },
+               autoButton { "A", colours::accent2 };
     juce::Slider volume;
     int dragStartIndex = -1;
     bool movedDuringDrag = false;
+};
+
+//==============================================================================
+/** Cabecera de un carril de automatización: nombre, valor actual, activar y ocultar. */
+class LaneHeader : public juce::Component
+{
+public:
+    LaneHeader (Context& c, const juce::Uuid& track, const juce::Uuid& lane) : ctx (c), trackId (track), laneId (lane)
+    {
+        for (auto* b : { &activeButton, &hideButton }) addAndMakeVisible (*b);
+        activeButton.setTooltip ("Activar / desactivar el carril (bypass)");
+        hideButton.setTooltip ("Ocultar el carril (no borra los puntos)");
+        activeButton.onClick = [this] { ctx.session.updateTrack (trackId, [this] (Track& t) { for (auto& l : t.automation) if (l.id == laneId) l.active = ! l.active; }); };
+        hideButton.onClick = [this] { ctx.session.updateTrack (trackId, [this] (Track& t) { for (auto& l : t.automation) if (l.id == laneId) l.visible = false; }, false); };
+    }
+
+    const AutomationLane* lane (const Track** owner = nullptr) const
+    {
+        auto* t = ctx.session.project().findTrack (trackId);
+        if (owner != nullptr) *owner = t;
+        if (t == nullptr) return nullptr;
+        for (auto& l : t->automation) if (l.id == laneId) return &l;
+        return nullptr;
+    }
+
+    void update()
+    {
+        if (auto* l = lane()) activeButton.setToggleState (l->active, juce::dontSendNotification);
+        repaint();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (10, 8).withTrimmedLeft (14);
+        auto top = r.removeFromTop (20);
+        hideButton.setBounds (top.removeFromRight (20));
+        top.removeFromRight (4);
+        activeButton.setBounds (top.removeFromRight (20));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const Track* t = nullptr;
+        auto* l = lane (&t);
+        if (l == nullptr || t == nullptr) return;
+        g.fillAll (colours::background.brighter (0.03f));
+        g.setColour (colours::stroke);
+        g.fillRect (0, getHeight() - 1, getWidth(), 1);
+        const auto colour = colours::named (t->colour);
+        g.setColour (colour.withAlpha (0.5f));
+        g.fillRect (20, 10, 2, getHeight() - 20);
+        auto r = getLocalBounds().reduced (10, 8).withTrimmedLeft (18);
+        g.setColour (l->active && t->automationMode != AutomationMode::off ? colours::text : colours::text3);
+        g.setFont (font (12, true));
+        g.drawFittedText (edit::automation::laneName (ctx.session.project(), *t, *l), r.removeFromTop (20).withTrimmedRight (50),
+                          juce::Justification::centredLeft, 1);
+        g.setColour (l->writing ? colours::record : colours::text2);
+        g.setFont (mono (10.5f));
+        const auto value = ctx.session.effectiveValue (*t, l->target);
+        auto text = l->target.formatValue (value);
+        if (l->writing) text << "  " << juce::String::fromUTF8 ("● escribiendo");
+        else if (t->automationMode == AutomationMode::off) text << "  (modo apagado)";
+        g.drawText (text, r.removeFromTop (18), juce::Justification::centredLeft, true);
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu()) return;
+        juce::PopupMenu m;
+        auto* l = lane();
+        if (l == nullptr) return;
+        m.addItem (l->active ? "Desactivar carril" : "Activar carril", [this] { activeButton.triggerClick(); });
+        m.addItem ("Ocultar carril", [this] { hideButton.triggerClick(); });
+        m.addItem ("Borrar todos los puntos", [this]
+        {
+            ctx.session.updateTrack (trackId, [this] (Track& t) { for (auto& x : t.automation) if (x.id == laneId) x.points.clear(); });
+        });
+        m.addItem ("Eliminar carril", [this]
+        {
+            ctx.session.updateTrack (trackId, [this] (Track& t)
+            {
+                t.automation.erase (std::remove_if (t.automation.begin(), t.automation.end(), [this] (auto& x) { return x.id == laneId; }), t.automation.end());
+            });
+        });
+        m.showMenuAsync (juce::PopupMenu::Options());
+    }
+
+    Context& ctx;
+    juce::Uuid trackId, laneId;
+    PillButton activeButton { "on", colours::accent2 }, hideButton { juce::String::fromUTF8 ("×"), colours::text3 };
 };
 
 //==============================================================================
@@ -231,30 +375,53 @@ public:
 
     void rebuild()
     {
-        auto& tracks = arr.ctx.session.project().tracks;
-        bool same = headers.size() == (int) tracks.size();
-        for (int i = 0; same && i < headers.size(); ++i) same = headers[i]->trackId == tracks[(size_t) i].id;
-        if (! same)
+        auto& proj = arr.ctx.session.project();
+        // Una cabecera por fila (pista o carril), en el mismo orden que la línea de tiempo.
+        std::vector<std::pair<juce::Uuid, juce::Uuid>> keys;
+        for (auto& r : arr.rows)
+        {
+            auto& t = proj.tracks[(size_t) r.track];
+            keys.push_back ({ t.id, r.lane >= 0 ? t.automation[(size_t) r.lane].id : juce::Uuid::null() });
+        }
+        if (keys != currentKeys)
         {
             headers.clear();
-            for (auto& t : tracks) addAndMakeVisible (headers.add (new TrackHeader (arr.ctx, t.id)));
+            lanes.clear();
+            for (auto& [track, lane] : keys)
+            {
+                if (lane.isNull()) addAndMakeVisible (headers.add (new TrackHeader (arr.ctx, track)));
+                else addAndMakeVisible (lanes.add (new LaneHeader (arr.ctx, track, lane)));
+            }
+            currentKeys = keys;
         }
         for (auto* h : headers) h->update();
-        setSize (Arrangement::headerWidth, juce::jmax (1, (int) tracks.size() * arr.trackHeight + 160));
+        for (auto* l : lanes) l->update();
+        setSize (Arrangement::headerWidth, juce::jmax (1, arr.contentHeight() + 160));
         resized();
     }
 
     void resized() override
     {
-        for (int i = 0; i < headers.size(); ++i)
-            headers[i]->setBounds (0, i * arr.trackHeight, getWidth(), arr.trackHeight);
+        int h = 0, l = 0;
+        for (auto& r : arr.rows)
+        {
+            if (r.lane < 0 && h < headers.size()) headers[h++]->setBounds (0, r.y, getWidth(), r.h);
+            else if (r.lane >= 0 && l < lanes.size()) lanes[l++]->setBounds (0, r.y, getWidth(), r.h);
+        }
     }
 
     void paint (juce::Graphics& g) override { g.fillAll (colours::panel); }
     void repaintMeters() { for (auto* h : headers) h->repaint (h->getLocalBounds().removeFromBottom (14)); }
+    void refreshValues()
+    {
+        for (auto* h : headers) h->refreshValues();
+        for (auto* l : lanes) l->repaint();
+    }
 
     Arrangement& arr;
     juce::OwnedArray<TrackHeader> headers;
+    juce::OwnedArray<LaneHeader> lanes;
+    std::vector<std::pair<juce::Uuid, juce::Uuid>> currentKeys;
 };
 
 //==============================================================================
@@ -268,13 +435,14 @@ public:
     double ppb() const { return session().pixelsPerBeat; }
     float xFor (Beats b) const { return (float) (b * ppb()); }
     Beats beatAt (float x) const { return juce::jmax (0.0, (double) x / ppb()); }
-    int rowAt (float y) const { return (int) std::floor (y / (float) arr.trackHeight); }
+    /** Pista cuya fila principal está en `y` (-1 en un carril de automatización o fuera). */
+    int rowAt (float y) const { auto* r = arr.rowAt (y); return r != nullptr && r->lane < 0 ? r->track : -1; }
 
     struct Hit { juce::Uuid clip; int track = -1; bool isMidi = false; enum Zone { body, left, right, fadeIn, fadeOut } zone = body; };
 
     juce::Rectangle<float> clipRect (int trackIndex, Beats start, Beats end) const
     {
-        return { xFor (start), (float) (trackIndex * arr.trackHeight + 4), juce::jmax (3.0f, xFor (end) - xFor (start)), (float) arr.trackHeight - 8 };
+        return { xFor (start), (float) (arr.trackY (trackIndex) + 4), juce::jmax (3.0f, xFor (end) - xFor (start)), (float) arr.trackHeight - 8 };
     }
 
     std::optional<Hit> hitTest (juce::Point<float> p) const
@@ -315,25 +483,23 @@ public:
         auto& proj = s.project();
         const auto tl = proj.timeline();
         const auto clip = g.getClipBounds();
-        const auto th = arr.trackHeight;
-
-        // Carriles
-        for (int i = 0; i < (int) proj.tracks.size(); ++i)
+        // Filas: pistas y carriles de automatización
+        for (auto& r : arr.rows)
         {
-            const auto y = i * th;
-            if (y > clip.getBottom() || y + th < clip.getY()) continue;
-            g.setColour (i % 2 == 0 ? colours::lane : colours::laneAlt);
-            g.fillRect (clip.getX(), y, clip.getWidth(), th);
-            if (proj.tracks[(size_t) i].id == s.selectedTrack)
+            if (r.y > clip.getBottom() || r.y + r.h < clip.getY()) continue;
+            if (r.lane >= 0) g.setColour (colours::background.brighter (0.02f));
+            else g.setColour (r.track % 2 == 0 ? colours::lane : colours::laneAlt);
+            g.fillRect (clip.getX(), r.y, clip.getWidth(), r.h);
+            if (r.lane < 0 && proj.tracks[(size_t) r.track].id == s.selectedTrack)
             {
                 g.setColour (juce::Colour (0x06ffffff));
-                g.fillRect (clip.getX(), y, clip.getWidth(), th);
+                g.fillRect (clip.getX(), r.y, clip.getWidth(), r.h);
             }
             g.setColour (colours::stroke);
-            g.fillRect (clip.getX(), y + th - 1, clip.getWidth(), 1);
+            g.fillRect (clip.getX(), r.y + r.h - 1, clip.getWidth(), 1);
         }
         g.setColour (colours::background);
-        g.fillRect (clip.getX(), (int) proj.tracks.size() * th, clip.getWidth(), getHeight());
+        g.fillRect (clip.getX(), arr.contentHeight(), clip.getWidth(), getHeight());
 
         // Secciones (tinte suave)
         for (auto& sec : proj.sections)
@@ -397,6 +563,11 @@ public:
             }
         }
 
+        // Envolventes de automatización
+        for (auto& r : arr.rows)
+            if (r.lane >= 0 && r.y <= clip.getBottom() && r.y + r.h >= clip.getY())
+                paintLane (g, r);
+
         // Selección por rectángulo
         if (marquee)
         {
@@ -418,7 +589,7 @@ public:
         {
             switch (drag->mode)
             {
-                case Drag::move:  return { start + drag->deltaBeats, end + drag->deltaBeats, juce::jlimit (0, (int) session().project().tracks.size() - 1, row + drag->deltaRows) };
+                case Drag::move:  return { start + drag->deltaBeats, end + drag->deltaBeats, movedRow (row, drag->deltaRows) };
                 case Drag::left:  return { juce::jmin (end - 0.05, start + drag->deltaBeats), end, row };
                 case Drag::right: return { start, juce::jmax (start + 0.05, end + drag->deltaBeats), row };
                 default: break;
@@ -463,6 +634,198 @@ public:
         g.drawRoundedRectangle (r.reduced (0.5f), 7, selected ? 1.5f : 1.0f);
     }
 
+    int movedRow (int row, int delta) const { return juce::jlimit (0, (int) session().project().tracks.size() - 1, row + delta); }
+
+    //--------------------------------------------------------------------------
+    // Automatización
+    juce::Rectangle<float> laneArea (const Arrangement::Row& r) const
+    {
+        return { 0.0f, (float) r.y + 6, (float) getWidth(), (float) r.h - 12 };
+    }
+    float yForValue (const AutomationTarget& t, double v, juce::Rectangle<float> area) const
+    {
+        return area.getBottom() - (float) t.toNormalised (v) * area.getHeight();
+    }
+    double valueForY (const AutomationTarget& t, float y, juce::Rectangle<float> area) const
+    {
+        return t.fromNormalised ((area.getBottom() - y) / area.getHeight());
+    }
+    const AutomationLane* laneOf (const Arrangement::Row& r, const Track** owner = nullptr) const
+    {
+        auto& proj = session().project();
+        if (r.track < 0 || r.track >= (int) proj.tracks.size()) return nullptr;
+        auto& t = proj.tracks[(size_t) r.track];
+        if (owner != nullptr) *owner = &t;
+        return r.lane >= 0 && r.lane < (int) t.automation.size() ? &t.automation[(size_t) r.lane] : nullptr;
+    }
+
+    void paintLane (juce::Graphics& g, const Arrangement::Row& r)
+    {
+        const Track* t = nullptr;
+        auto* lane = laneOf (r, &t);
+        if (lane == nullptr) return;
+        const auto area = laneArea (r);
+        const auto clip = g.getClipBounds().toFloat();
+        const bool live = lane->active && t->automationMode != AutomationMode::off;
+        const auto colour = lane->writing ? colours::record : colours::named (t->colour);
+
+        // Línea de referencia (valor por defecto: 0 dB / centro)
+        g.setColour (juce::Colours::white.withAlpha (0.05f));
+        g.fillRect (clip.getX(), yForValue (lane->target, lane->target.defaultValue(), area), clip.getWidth(), 1.0f);
+
+        // Curva: se muestrea por píxeles (el volumen se interpola en dB y se dibuja en escala de fader)
+        juce::Path path, fill;
+        const float x0 = juce::jmax (0.0f, clip.getX() - 2), x1 = clip.getRight() + 2;
+        bool firstPoint = true;
+        for (float x = x0; x <= x1; x += 3.0f)
+        {
+            const auto y = yForValue (lane->target, lane->valueAt (beatAt (x)), area);
+            if (firstPoint) { path.startNewSubPath (x, y); fill.startNewSubPath (x, area.getBottom()); fill.lineTo (x, y); firstPoint = false; }
+            else { path.lineTo (x, y); fill.lineTo (x, y); }
+        }
+        fill.lineTo (x1, area.getBottom());
+        fill.closeSubPath();
+        g.setColour (colour.withAlpha (live ? 0.10f : 0.04f));
+        g.fillPath (fill);
+        g.setColour (colour.withAlpha (live ? 0.95f : 0.35f));
+        g.strokePath (path, juce::PathStrokeType (live ? 1.6f : 1.0f));
+
+        for (size_t i = 0; i < lane->points.size(); ++i)
+        {
+            const auto& p = lane->points[i];
+            const auto x = xFor (p.time);
+            if (x < clip.getX() - 6 || x > clip.getRight() + 6) continue;
+            const auto y = yForValue (lane->target, p.value, area);
+            const bool hot = laneDrag && laneDrag->laneId == lane->id && laneDrag->point == (int) i;
+            g.setColour (colours::background);
+            g.fillEllipse (x - 4, y - 4, 8, 8);
+            g.setColour (hot ? juce::Colours::white : colour.withAlpha (live ? 1.0f : 0.5f));
+            g.drawEllipse (x - 3.5f, y - 3.5f, 7, 7, 1.6f);
+            if (hot)
+            {
+                g.setFont (mono (10));
+                g.drawText (lane->target.formatValue (p.value), juce::Rectangle<float> (x + 7, y - 16, 90, 14), juce::Justification::centredLeft);
+            }
+        }
+    }
+
+    struct LaneDrag { juce::Uuid trackId, laneId; int point = -1; bool moved = false; };
+    std::optional<LaneDrag> laneDrag;
+
+    int pointNear (const AutomationLane& lane, const juce::Rectangle<float>& area, juce::Point<float> p) const
+    {
+        for (int i = (int) lane.points.size() - 1; i >= 0; --i)
+        {
+            const auto& pt = lane.points[(size_t) i];
+            if (juce::Point<float> (xFor (pt.time), yForValue (lane.target, pt.value, area)).getDistanceFrom (p) <= 7.0f) return i;
+        }
+        return -1;
+    }
+
+    bool laneMouseDown (const juce::MouseEvent& e)
+    {
+        auto* row = arr.rowAt (e.position.y);
+        if (row == nullptr || row->lane < 0) return false;
+        const Track* t = nullptr;
+        auto* lane = laneOf (*row, &t);
+        if (lane == nullptr) return true;
+        auto& s = session();
+        s.selectTrack (t->id);
+        const auto area = laneArea (*row);
+        const auto near = pointNear (*lane, area, e.position);
+        const auto trackId = t->id;
+        const auto laneId = lane->id;
+        auto withLane = [&s, trackId, laneId] (const std::function<void (AutomationLane&)>& fn, bool undoable)
+        {
+            s.updateTrack (trackId, [&] (Track& x) { for (auto& l : x.automation) if (l.id == laneId) fn (l); }, undoable);
+        };
+        if (e.mods.isPopupMenu())
+        {
+            juce::PopupMenu m;
+            if (near >= 0)
+            {
+                m.addItem ("Eliminar punto", [withLane, near] { withLane ([near] (AutomationLane& l) { if (near < (int) l.points.size()) l.points.erase (l.points.begin() + near); }, true); });
+                auto value = lane->points[(size_t) near].value;
+                auto target = lane->target;
+                if (target.kind == AutomationTarget::Kind::volume || target.kind == AutomationTarget::Kind::sendLevel)
+                    m.addItem ("Escribir valor (dB)…"_u, [this, withLane, near, value]
+                    {
+                        if (! arr.ctx.askText) return;
+                        arr.ctx.askText ("Valor del punto (dB)", juce::String (value, 1), [withLane, near] (juce::String text)
+                        {
+                            const auto v = text.retainCharacters ("-+0123456789.,").replaceCharacter (',', '.').getDoubleValue();
+                            withLane ([near, v] (AutomationLane& l) { if (near < (int) l.points.size()) l.points[(size_t) near].value = juce::jlimit (l.target.minValue(), l.target.maxValue(), v); }, true);
+                        });
+                    });
+            }
+            const auto at = s.snap (beatAt (e.position.x));
+            const auto v = valueForY (lane->target, e.position.y, area);
+            m.addItem (juce::String::fromUTF8 ("Agregar punto aquí"), [withLane, at, v] { withLane ([at, v] (AutomationLane& l) { edit::automation::addPoint (l, at, v); }, true); });
+            if (s.project().loopEnd > s.project().loopStart + 0.001)
+            {
+                const auto a = s.project().loopStart, b = s.project().loopEnd;
+                m.addItem (juce::String::fromUTF8 ("Borrar puntos en la selección de tiempo"), [withLane, a, b] { withLane ([a, b] (AutomationLane& l) { edit::automation::removePoints (l, a, b); }, true); });
+            }
+            m.addItem ("Borrar todos los puntos", [withLane] { withLane ([] (AutomationLane& l) { l.points.clear(); }, true); });
+            m.showMenuAsync (juce::PopupMenu::Options());
+            return true;
+        }
+        if (e.mods.isAltDown() && near >= 0)   // Alt+clic borra el punto (como REAPER)
+        {
+            withLane ([near] (AutomationLane& l) { if (near < (int) l.points.size()) l.points.erase (l.points.begin() + near); }, true);
+            return true;
+        }
+        s.beginGesture();
+        int point = near;
+        if (point < 0)
+        {
+            // Clic en el carril: punto nuevo sobre la curva (o donde se hizo clic si está lejos)
+            const auto at = s.snap (beatAt (e.position.x));
+            const auto onCurve = std::abs (yForValue (lane->target, lane->valueAt (at), area) - e.position.y) < 10.0f;
+            const auto v = onCurve ? lane->valueAt (at) : valueForY (lane->target, e.position.y, area);
+            withLane ([&point, at, v] (AutomationLane& l) { point = edit::automation::addPoint (l, at, v); }, false);
+        }
+        laneDrag = LaneDrag { trackId, laneId, point, false };
+        repaint();
+        return true;
+    }
+
+    void laneMouseDrag (const juce::MouseEvent& e)
+    {
+        auto& s = session();
+        auto* t = s.project().findTrack (laneDrag->trackId);
+        if (t == nullptr) return;
+        int rowIndex = -1;
+        for (int i = 0; i < (int) arr.rows.size(); ++i)
+        {
+            auto& r = arr.rows[(size_t) i];
+            if (r.lane >= 0 && r.track == s.project().trackIndex (t->id) && t->automation[(size_t) r.lane].id == laneDrag->laneId) rowIndex = i;
+        }
+        if (rowIndex < 0) return;
+        const auto area = laneArea (arr.rows[(size_t) rowIndex]);
+        const bool fine = e.mods.isShiftDown();   // Shift: solo vertical
+        auto& d = *laneDrag;
+        const auto beat = s.snap (beatAt (e.position.x));
+        const auto y = juce::jlimit (area.getY(), area.getBottom(), e.position.y);
+        s.updateTrack (d.trackId, [&] (Track& x)
+        {
+            for (auto& l : x.automation)
+                if (l.id == d.laneId && d.point >= 0 && d.point < (int) l.points.size())
+                {
+                    auto& p = l.points[(size_t) d.point];
+                    p.value = valueForY (l.target, y, area);
+                    if (! fine)
+                    {
+                        // No puede pasar a los vecinos (el orden de los puntos se mantiene)
+                        const auto lo = d.point > 0 ? l.points[(size_t) d.point - 1].time : 0.0;
+                        const auto hi = d.point + 1 < (int) l.points.size() ? l.points[(size_t) d.point + 1].time : 1.0e9;
+                        p.time = juce::jlimit (lo, hi, beat);
+                    }
+                }
+        }, false);
+        d.moved = true;
+    }
+
     void paintMidiClip (juce::Graphics& g, const MidiClip& c, juce::Rectangle<float> r, juce::Colour colour, bool selected)
     {
         g.setColour (colour.withAlpha (selected ? 0.34f : 0.18f));
@@ -502,6 +865,13 @@ public:
 
     void mouseMove (const juce::MouseEvent& e) override
     {
+        if (auto* row = arr.rowAt (e.position.y); row != nullptr && row->lane >= 0)
+        {
+            const auto* lane = laneOf (*row);
+            setMouseCursor (lane != nullptr && pointNear (*lane, laneArea (*row), e.position) >= 0 ? juce::MouseCursor::DraggingHandCursor
+                                                                                                    : juce::MouseCursor::CrosshairCursor);
+            return;
+        }
         auto hit = hitTest (e.position);
         if (! hit) { setMouseCursor (juce::MouseCursor::NormalCursor); return; }
         switch (hit->zone)
@@ -514,6 +884,7 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (laneMouseDown (e)) return;
         auto& s = session();
         auto hit = hitTest (e.position);
         const bool add = e.mods.isShiftDown() || e.mods.isCommandDown();
@@ -546,6 +917,7 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (laneDrag) { laneMouseDrag (e); return; }
         if (! drag) return;
         auto& s = session();
         if (! drag->started && e.getDistanceFromDragStart() < 4) return;
@@ -555,7 +927,11 @@ public:
         {
             case Drag::move:
                 drag->deltaBeats = s.snap (drag->anchorStart + dx) - drag->anchorStart;
-                drag->deltaRows = (int) std::round ((float) e.getDistanceFromDragStartY() / (float) arr.trackHeight);
+            {
+                const auto from = arr.trackIndexAt (e.mouseDownPosition.y), to = arr.trackIndexAt (e.position.y);
+                if (from >= 0 && to >= 0) drag->deltaRows = to - from;
+                else if (e.position.y > (float) arr.contentHeight()) drag->deltaRows = (int) session().project().tracks.size();
+            }
                 break;
             case Drag::left:  drag->deltaBeats = s.snap (drag->anchorStart + dx) - drag->anchorStart; break;
             case Drag::right: drag->deltaBeats = s.snap (drag->anchorEnd + dx) - drag->anchorEnd; break;
@@ -570,6 +946,7 @@ public:
 
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (laneDrag) { laneDrag.reset(); repaint(); return; }
         if (! drag) return;
         auto d = *drag;
         drag.reset();
@@ -610,7 +987,9 @@ public:
                     case Drag::move:
                     {
                         const auto row = juce::jlimit (0, (int) p.tracks.size() - 1, ref.track + d.deltaRows);
-                        edit::moveClip (p, id, start + d.deltaBeats, p.tracks[(size_t) row].id);
+                        // Los ítems no van a un bus: se quedan en su pista.
+                        const auto& dest = p.tracks[(size_t) row];
+                        edit::moveClip (p, id, start + d.deltaBeats, dest.isBus() ? t.id : dest.id);
                         break;
                     }
                     case Drag::left:  edit::trimClipStart (p, id, start + d.deltaBeats); break;
@@ -630,6 +1009,21 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         auto& s = session();
+        if (auto* row = arr.rowAt (e.position.y); row != nullptr && row->lane >= 0)
+        {
+            // Doble clic sobre un punto: borrarlo
+            const Track* t = nullptr;
+            if (auto* lane = laneOf (*row, &t))
+                if (const auto near = pointNear (*lane, laneArea (*row), e.position); near >= 0)
+                {
+                    const auto laneId = lane->id;
+                    s.updateTrack (t->id, [laneId, near] (Track& x)
+                    {
+                        for (auto& l : x.automation) if (l.id == laneId && near < (int) l.points.size()) l.points.erase (l.points.begin() + near);
+                    });
+                }
+            return;
+        }
         if (auto hit = hitTest (e.position))
         {
             if (hit->isMidi) { s.editingMidiClip = hit->clip; if (arr.ctx.openPianoRoll) arr.ctx.openPianoRoll(); }
@@ -708,9 +1102,9 @@ public:
         auto& s = session();
         juce::Array<juce::File> list;
         for (auto& f : files) list.add (juce::File (f));
-        const auto row = rowAt ((float) y);
+        const auto row = arr.trackIndexAt ((float) y);
         std::optional<juce::Uuid> track;
-        if (row >= 0 && row < (int) s.project().tracks.size()) track = s.project().tracks[(size_t) row].id;
+        if (row >= 0 && row < (int) s.project().tracks.size() && ! s.project().tracks[(size_t) row].isBus()) track = s.project().tracks[(size_t) row].id;
         s.importFiles (list, track, s.snap (beatAt ((float) x)));
         repaint();
     }
@@ -939,6 +1333,7 @@ public:
             m.addItem ("Pista de audio\tCtrl/Cmd+T", [&s] { s.addTrack (TrackRole::audio); });
             m.addItem ("Pista de instrumento (MIDI)\tShift+Ctrl/Cmd+T", [&s] { s.addTrack (TrackRole::instrument); });
             m.addItem (juce::String::fromUTF8 ("Pista guía"), [&s] { s.addTrack (TrackRole::guide); });
+            m.addItem ("Bus (submezcla o efectos)", [&s] { s.addTrack (TrackRole::bus); });
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addTrack));
         };
         addAndMakeVisible (addTrack);
@@ -1053,11 +1448,45 @@ void Arrangement::resized()
     refresh();
 }
 
+void Arrangement::computeLayout()
+{
+    rows.clear();
+    int y = 0;
+    auto& tracks = ctx.session.project().tracks;
+    for (int i = 0; i < (int) tracks.size(); ++i)
+    {
+        rows.push_back ({ i, -1, y, trackHeight });
+        y += trackHeight;
+        for (int l = 0; l < (int) tracks[(size_t) i].automation.size(); ++l)
+            if (tracks[(size_t) i].automation[(size_t) l].visible)
+            {
+                rows.push_back ({ i, l, y, laneHeight });
+                y += laneHeight;
+            }
+    }
+}
+
+int Arrangement::trackY (int track) const
+{
+    for (auto& r : rows) if (r.track == track && r.lane < 0) return r.y;
+    return track * trackHeight;
+}
+
+const Arrangement::Row* Arrangement::rowAt (float y) const
+{
+    if (y < 0) return nullptr;
+    auto it = std::upper_bound (rows.begin(), rows.end(), y, [] (float v, const Row& r) { return v < (float) r.y; });
+    if (it == rows.begin()) return nullptr;
+    --it;
+    return y < (float) (it->y + it->h) ? &*it : nullptr;
+}
+
 void Arrangement::refresh()
 {
     auto& s = ctx.session;
+    computeLayout();
     const auto width = (int) (s.timelineLength() * s.pixelsPerBeat);
-    const auto height = juce::jmax (timelineView.getHeight(), (int) s.project().tracks.size() * trackHeight + 160);
+    const auto height = juce::jmax (timelineView.getHeight(), contentHeight() + 160);
     timeline->setSize (width, height);
     headers->rebuild();
     headers->setSize (headerWidth, height);
@@ -1111,6 +1540,15 @@ void Arrangement::timerCallback()
         }
     }
     headers->repaintMeters();
+    if (s.isPlaying() && ++valueTicks % 3 == 0) headers->refreshValues();
+    // Mientras se escribe automatización, la curva crece bajo el cursor.
+    if (s.isPlaying())
+        for (auto& r : rows)
+            if (r.lane >= 0)
+            {
+                auto& t = s.project().tracks[(size_t) r.track];
+                if (t.automation[(size_t) r.lane].writing) timeline->repaint (juce::jmax (0, x - 200), r.y, 260, r.h);
+            }
 }
 
 } // namespace wdaw::ui

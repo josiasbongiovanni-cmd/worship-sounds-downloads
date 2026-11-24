@@ -101,6 +101,7 @@ void MainComponent::openProject (const juce::File& folder)
 void MainComponent::buildEditor()
 {
     ctx = std::make_unique<Context> (Context { *session, meters, thumbnails });
+    paramWatcher = std::make_unique<ParamWatcher> (*session);
     ctx->openPluginWindow = [this] (const juce::Uuid& t, const juce::Uuid& s) { openPluginWindow (t, s); };
     ctx->choosePlugin = [this] (const juce::Uuid& t, bool inst) { choosePluginFor (t, inst); };
     ctx->addMasterPlugin = [this] { choosePluginFor (juce::Uuid::null(), false); };
@@ -137,6 +138,7 @@ void MainComponent::closeProject()
     inspector.reset();
     transport.reset();
     ctx.reset();
+    paramWatcher.reset();
     session.reset();          // guarda (con el estado de los plugins) al cerrarse
     if (home) { home->refresh(); home->setVisible (true); }
     if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->setName ("Worship DAW");
@@ -377,7 +379,15 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
                 m.addSeparator(); for (auto id : { cmd::cut, cmd::copy, cmd::paste, cmd::duplicate, cmd::deleteItems }) add (id);
                 m.addSeparator(); for (auto id : { cmd::split, cmd::selectAll, cmd::clearSelection }) add (id);
                 break;
-        case 2: add (cmd::insertTrack); add (cmd::insertInstrumentTrack); break;
+        case 2: add (cmd::insertTrack); add (cmd::insertInstrumentTrack);
+                m.addItem ("Insertar bus (submezcla o efectos)", session != nullptr, false, [this] { if (session) session->addTrack (TrackRole::bus); });
+                m.addItem ("Bus de reverb para la pista seleccionada", session != nullptr, false, [this]
+                {
+                    if (session == nullptr || session->project().findTrack (session->selectedTrack) == nullptr) return;
+                    const auto bus = session->createBusFor ({ session->selectedTrack }, true, "Reverb");
+                    session->updateTrack (bus, [] (Track& t) { t.inserts.push_back (PluginManager::internalSlot ("reverb")); });
+                });
+                break;
         case 3: for (auto id : { cmd::playStop, cmd::record, cmd::repeat, cmd::metronome }) add (id);
                 m.addSeparator(); for (auto id : { cmd::toStart, cmd::toEnd, cmd::prevStop, cmd::nextStop, cmd::insertMarker }) add (id);
                 m.addSeparator(); add (cmd::panic);

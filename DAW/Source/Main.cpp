@@ -67,6 +67,19 @@ static juce::File makeDemoProject()
     p.tracks[6].inserts.back().name = "Worship Vocal Rack";
     p.masterInserts.push_back (PluginManager::internalSlot ("latency:0"));
     p.masterInserts.back().name = "WorshipMastering";
+    // Automatización: la voz sube en el coro; el pad crece hacia el puente
+    {
+        auto& voz = edit::automation::ensureLane (p.tracks[6], { AutomationTarget::Kind::volume }, -3.0);
+        edit::automation::addPoint (voz, p.sections[3].start - 1, -3.0);
+        edit::automation::addPoint (voz, p.sections[3].start, 0.5);
+        edit::automation::addPoint (voz, p.sections[3].end() - 2, 0.5);
+        edit::automation::addPoint (voz, p.sections[3].end(), -4.0);
+        auto& pad = edit::automation::ensureLane (p.tracks[5], { AutomationTarget::Kind::volume }, -24.0);
+        edit::automation::addPoint (pad, p.sections[1].start, -18.0);
+        edit::automation::addPoint (pad, p.sections[3].start, -4.0);
+        edit::automation::addPoint (pad, p.sections[4].start, -10.0);
+        p.tracks[6].automationMode = AutomationMode::touch;
+    }
     edit::addMarker (p, p.sections[1].start + 16, "Respiración"_u);
     p.loopStart = p.sections[3].start; p.loopEnd = p.sections[3].end(); p.loopEnabled = true;
     io::save (p, folder);

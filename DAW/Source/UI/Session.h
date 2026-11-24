@@ -128,6 +128,27 @@ public:
     void updateTrack (const juce::Uuid&, const std::function<void (Track&)>&, bool undoable = true);
     void moveTrack (const juce::Uuid&, int newIndex);
 
+    //--- Ruteo (buses y envíos)
+    std::optional<juce::Uuid> addSend (const juce::Uuid& from, const juce::Uuid& bus, bool preFader = false);
+    void removeSend (const juce::Uuid& track, const juce::Uuid& send);
+    void setOutputBus (const juce::Uuid& track, const juce::Uuid& bus);
+    /** Crea un bus y le manda las pistas indicadas (salida o envío). */
+    juce::Uuid createBusFor (const std::vector<juce::Uuid>& tracks, bool asSend, juce::String name = {});
+
+    //--- Controles automatizables (faders, perillas, envíos, parámetros de plugins).
+    //    Escriben el valor fijo y, en modo Touch/Latch con el transporte en marcha, también el carril.
+    void touchBegin (const juce::Uuid& track, const AutomationTarget&);
+    void touchEnd (const juce::Uuid& track, const AutomationTarget&);
+    void setControl (const juce::Uuid& track, const AutomationTarget&, double value);
+    /** Valor que suena ahora (el del carril si manda, si no el fijo). */
+    double effectiveValue (const Track&, const AutomationTarget&) const;
+    double staticValue (const Track&, const AutomationTarget&) const;
+    void showLane (const juce::Uuid& track, const AutomationTarget&);
+    bool isWriting (const juce::Uuid& track) const;
+    /** Último parámetro de plugin tocado (para "Automatizar último parámetro"). */
+    struct TouchedParam { juce::Uuid track; AutomationTarget target; };
+    std::optional<TouchedParam> lastTouchedParam;
+
     //--- Marcadores, secciones, selección de tiempo
     void insertMarker();
     void goToMarker (int number);
@@ -174,6 +195,23 @@ private:
     void applyPluginStates (Project&);
     void finishRecording();
     void timerCallback() override;
+
+    struct Writer
+    {
+        juce::Uuid track;
+        AutomationTarget target;
+        Beats lastBeat = 0;
+        double value = 0;
+        bool held = false;
+        juce::uint32 lastChange = 0;
+    };
+    std::vector<Writer> writers;
+    bool wasPlayingForWriters = false;
+    std::unique_ptr<juce::TimedCallback> writeTimer;
+    void writeTick();
+    void finishWriters();
+    Writer* findWriter (const juce::Uuid& track, const AutomationTarget&);
+    void applyStatic (Track&, const AutomationTarget&, double value) const;
 };
 
 } // namespace wdaw
