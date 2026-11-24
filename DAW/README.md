@@ -29,6 +29,12 @@ Un solo código en C++ (JUCE 8) para macOS y Windows.
 - **Interfaces de audio:** CoreAudio (Mac), WASAPI y DirectSound (Windows); entradas mono/estéreo por pista, monitoreo (apagado/encendido/automático), salidas directas para click y guía (in-ears).
 - **Grabación:** punch-in, cuenta previa y compensación de latencia (de la interfaz + plugins + ajuste manual). Se graba directo al disco, en la carpeta Audio/ del proyecto.
 - **MIDI:** controladores en vivo, grabación de notas, pedal sustain, pitch bend y aftertouch. Piano roll con cuantización (fuerza y duración), transponer, legato, humanizar y carril de velocidad. Aprender MIDI para faders, mute/solo y transporte.
+- **Superficies de control Mackie Control (MCU):** Behringer X-Touch, iCON Platform, PreSonus FaderPort (modo MCU), Mackie MCU Pro…
+  - Se configura en Preferencias › Superficie de control.
+  - Faders motorizados (tocar un fader escribe automatización) y V-Pots para paneo o envíos.
+  - REC / SOLO / MUTE / SELECT, bancos de 8 canales y transporte.
+  - Modos de automatización, marcadores (F1–F8) y Jog.
+  - Pantalla con nombres y valores, contador en compases y medidores.
 - **Exportar** WAV/FLAC/AIFF/OGG (16/24/32 bits, normalizar, dither, cambio de frecuencia) y stems por pista.
 - **Guardado seguro:** autoguardado, copia .bak y copias en Backups/. Los proyectos borrados van a la Papelera.
 - **Atajos de REAPER:** espacio, Cmd/Ctrl+R, R, S, M, 1–9, [ ], Cmd/Ctrl+T, + / −…
@@ -67,7 +73,7 @@ build\WorshipDAW_artefacts\Release\"Worship DAW.exe"
 - ASIO en Windows: requiere el SDK de Steinberg y aceptar su licencia; hoy se usa WASAPI. Activar con `JUCE_ASIO=1` y la ruta del SDK.
 - Escaneo de plugins en un proceso separado. Hoy, si un plugin se cuelga al escanearlo, queda marcado y se salta la próxima vez.
 - Firma y notarización en Mac (cuenta de Apple Developer) y firma de código en Windows.
-- Superficies Mackie Control y exportar a MP3.
+- Exportar a MP3, extensores Mackie (XT) y modos Plugin/EQ de la superficie.
 
 ## Código
 

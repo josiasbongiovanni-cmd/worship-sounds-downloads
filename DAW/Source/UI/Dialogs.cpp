@@ -15,6 +15,14 @@ AppSettings::AppSettings()
     props.setStorageParameters (o);
 }
 
+juce::StringArray AppSettings::excludedMidiInputs()
+{
+    auto list = juce::StringArray::fromTokens (file().getValue ("midiDisabled"), "|", "");
+    // La superficie de control habla su propio protocolo: no debe tocar notas en los instrumentos.
+    if (file().getBoolValue ("mcuEnabled") && file().getValue ("mcuIn").isNotEmpty()) list.addIfNotAlreadyThere (file().getValue ("mcuIn"));
+    return list;
+}
+
 juce::File AppSettings::projectsFolder()
 {
     auto stored = file().getValue ("projectsFolder");
@@ -128,7 +136,7 @@ namespace
                     auto list = juce::StringArray::fromTokens (settings.file().getValue ("midiDisabled"), "|", "");
                     if (t->getToggleState()) list.removeString (id); else list.addIfNotAlreadyThere (id);
                     settings.file().setValue ("midiDisabled", list.joinIntoString ("|"));
-                    engine.refreshMidiInputs (list);
+                    engine.refreshMidiInputs (settings.excludedMidiInputs());
                 };
                 addAndMakeVisible (t);
             }
@@ -196,6 +204,124 @@ namespace
         std::vector<MidiMapping::Target> targets;
         juce::TextButton refreshButton { "Buscar controladores" }, panicButton { "Panico: apagar todas las notas" };
         int mappingsTop = 0;
+    };
+
+    /** Superficie de control Mackie Control (MCU): puertos MIDI de entrada y salida. */
+    class SurfaceTab : public juce::Component, private juce::Timer
+    {
+    public:
+        SurfaceTab (AudioEngine& e, AppSettings& s) : engine (e), settings (s)
+        {
+            enabled.setToggleState (settings.file().getBoolValue ("mcuEnabled"), juce::dontSendNotification);
+            for (auto* c : std::initializer_list<juce::Component*> { &enabled, &inputBox, &outputBox, &apply, &refresh }) addAndMakeVisible (c);
+            apply.onClick = [this] { save(); };
+            refresh.onClick = [this] { fill(); };
+            enabled.onClick = [this] { save(); };
+            fill();
+            startTimerHz (2);
+        }
+
+        void fill()
+        {
+            inputs = juce::MidiInput::getAvailableDevices();
+            outputs = juce::MidiOutput::getAvailableDevices();
+            inputBox.clear (juce::dontSendNotification);
+            outputBox.clear (juce::dontSendNotification);
+            inputBox.addItem ("(ninguna)", 1);
+            outputBox.addItem ("(ninguna)", 1);
+            const auto inId = settings.file().getValue ("mcuIn"), outId = settings.file().getValue ("mcuOut");
+            for (int i = 0; i < inputs.size(); ++i)
+            {
+                inputBox.addItem (inputs[i].name, i + 2);
+                if (inputs[i].identifier == inId) inputBox.setSelectedId (i + 2, juce::dontSendNotification);
+            }
+            for (int i = 0; i < outputs.size(); ++i)
+            {
+                outputBox.addItem (outputs[i].name, i + 2);
+                if (outputs[i].identifier == outId) outputBox.setSelectedId (i + 2, juce::dontSendNotification);
+            }
+            if (inputBox.getSelectedId() == 0) inputBox.setSelectedId (1, juce::dontSendNotification);
+            if (outputBox.getSelectedId() == 0) outputBox.setSelectedId (1, juce::dontSendNotification);
+            // Sugerencia: si el puerto se llama como una superficie conocida, se elige solo
+            if (inId.isEmpty())
+                for (int i = 0; i < inputs.size(); ++i)
+                    for (auto& known : { "X-Touch", "MCU", "Mackie", "Platform", "FaderPort", "iCON", "QCon", "Behringer" })
+                        if (inputs[i].name.containsIgnoreCase (known)) { inputBox.setSelectedId (i + 2, juce::dontSendNotification); break; }
+            if (outId.isEmpty())
+                for (int i = 0; i < outputs.size(); ++i)
+                    for (auto& known : { "X-Touch", "MCU", "Mackie", "Platform", "FaderPort", "iCON", "QCon", "Behringer" })
+                        if (outputs[i].name.containsIgnoreCase (known)) { outputBox.setSelectedId (i + 2, juce::dontSendNotification); break; }
+            inputBox.onChange = outputBox.onChange = [this] { save(); };
+            repaint();
+        }
+
+        void save()
+        {
+            const int in = inputBox.getSelectedId() - 2, out = outputBox.getSelectedId() - 2;
+            settings.file().setValue ("mcuEnabled", enabled.getToggleState());
+            settings.file().setValue ("mcuIn", in >= 0 && in < inputs.size() ? inputs[in].identifier : juce::String());
+            settings.file().setValue ("mcuOut", out >= 0 && out < outputs.size() ? outputs[out].identifier : juce::String());
+            if (settings.applySurface) status = settings.applySurface();
+            engine.refreshMidiInputs (settings.excludedMidiInputs());
+            repaint();
+        }
+
+        void timerCallback() override
+        {
+            if (settings.surfaceStatus) { auto s = settings.surfaceStatus(); if (s != status) { status = s; repaint(); } }
+        }
+
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (16);
+            r.removeFromTop (24);
+            enabled.setBounds (r.removeFromTop (26));
+            r.removeFromTop (12);
+            inputBox.setBounds (r.removeFromTop (28).withTrimmedLeft (90).withWidth (340));
+            r.removeFromTop (8);
+            outputBox.setBounds (r.removeFromTop (28).withTrimmedLeft (90).withWidth (340));
+            r.removeFromTop (12);
+            auto row = r.removeFromTop (30);
+            refresh.setBounds (row.removeFromLeft (170));
+            row.removeFromLeft (8);
+            apply.setBounds (row.removeFromLeft (150));
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            auto r = getLocalBounds().reduced (16);
+            g.setColour (colours::text3);
+            g.setFont (font (11, true));
+            g.drawText ("MACKIE CONTROL (MCU)", r.removeFromTop (20), juce::Justification::centredLeft);
+            g.setColour (colours::text2);
+            g.setFont (font (12.5f));
+            g.drawText ("Entrada", inputBox.getBounds().withX (16).withWidth (80), juce::Justification::centredLeft);
+            g.drawText ("Salida", outputBox.getBounds().withX (16).withWidth (80), juce::Justification::centredLeft);
+            auto info = getLocalBounds().reduced (16).withTop (apply.getBottom() + 16);
+            g.setColour (status.startsWith ("Conectada") ? colours::accent2 : colours::text2);
+            g.drawText ("Estado: " + status, info.removeFromTop (22), juce::Justification::centredLeft);
+            info.removeFromTop (8);
+            g.setColour (colours::text2);
+            g.setFont (font (12));
+            g.drawFittedText (juce::String::fromUTF8 (
+                "Funciona con superficies en modo Mackie Control / MCU (Behringer X-Touch, iCON Platform, PreSonus FaderPort, "
+                "Mackie MCU Pro…). Pon la superficie en modo MCU (o "Mackie Control") y elige sus puertos.\n\n"
+                "Faders = volumen (tocar un fader escribe automatización en Touch/Latch) · V-Pots = paneo, o envíos con SEND "
+                "(SEND otra vez = bus siguiente; pulsar el V-Pot crea o silencia el envío) · Bank / Channel ◀ ▶ = mover los 8 canales · "
+                "REC / SOLO / MUTE / SELECT por canal · Play, Stop (parado: al inicio), Rec, Cycle = repetir, Click, Marker · "
+                "◀◀ ▶▶ = marcador anterior / siguiente · F1–F8 = ir a marcadores 1–8 · Jog = mover el cursor (Shift: de a compás) · "
+                "▲ ▼ = pista anterior / siguiente · Read, Touch, Latch, Write (= Latch), Trim (= apagada) para la pista seleccionada · "
+                "Save · Undo (Shift = Redo) · Name/Value = ver dB."),
+                info, juce::Justification::topLeft, 14);
+        }
+
+        AudioEngine& engine;
+        AppSettings& settings;
+        juce::Array<juce::MidiDeviceInfo> inputs, outputs;
+        juce::ToggleButton enabled { "Usar una superficie de control" };
+        juce::ComboBox inputBox, outputBox;
+        juce::TextButton apply { "Reconectar" }, refresh { "Buscar dispositivos" };
+        juce::String status = "Desconectada";
     };
 
     /** Plugins: lista y escaneo (VST3 en Mac y Windows, AU en Mac) con la lista negra de plugins que fallan. */
@@ -269,6 +395,7 @@ PreferencesPanel::PreferencesPanel (AudioEngine& e, PluginManager& pm, MidiLearn
     tabs.addTab ("Audio", colours::panel, new AudioTab (e, s), true);
     tabs.addTab ("MIDI", colours::panel, new MidiTab (e, ml, s), true);
     tabs.addTab ("Plugins", colours::panel, new PluginsTab (pm, s), true);
+    tabs.addTab ("Superficie de control", colours::panel, new SurfaceTab (e, s), true);
     tabs.addTab ("Atajos", colours::panel, new ShortcutsTab(), true);
     tabs.setCurrentTabIndex (initialTab);
     tabs.setTabBarDepth (34);

@@ -13,6 +13,11 @@ struct AppSettings
     AppSettings();
     juce::PropertiesFile& file() { return *props.getUserSettings(); }
     juce::File projectsFolder();
+    /** Entradas MIDI que no van a los instrumentos (desactivadas + la de la superficie de control). */
+    juce::StringArray excludedMidiInputs();
+    /** Abre la superficie de control con lo guardado; devuelve el estado. Lo define la ventana principal. */
+    std::function<juce::String()> applySurface;
+    std::function<juce::String()> surfaceStatus;
 };
 
 /** Preferencias (Ctrl/Cmd+,): Audio (dispositivo, buffer, latencia), Grabación, MIDI, Plugins y Atajos. */

@@ -78,7 +78,8 @@ target_link_libraries(WorshipDAW PRIVATE ${WDAW_MODULES} WorshipDAWData
 # Pruebas (modelo + motor de audio sin interfaz). ctest o ./WorshipDAWTests
 juce_add_console_app(WorshipDAWTests PRODUCT_NAME "WorshipDAWTests")
 file(GLOB WDAW_TEST_SOURCES CONFIGURE_DEPENDS Tests/*.cpp)
-target_sources(WorshipDAWTests PRIVATE ${WDAW_TEST_SOURCES} ${WDAW_MODEL_SOURCES} ${WDAW_ENGINE_SOURCES})
+target_sources(WorshipDAWTests PRIVATE ${WDAW_TEST_SOURCES} ${WDAW_MODEL_SOURCES} ${WDAW_ENGINE_SOURCES}
+    Source/UI/Session.cpp Source/UI/MackieControl.cpp)
 target_include_directories(WorshipDAWTests PRIVATE Source)
 target_compile_definitions(WorshipDAWTests PRIVATE ${WDAW_DEFINITIONS} JUCE_UNIT_TESTS=1)
 target_link_libraries(WorshipDAWTests PRIVATE ${WDAW_MODULES} juce::juce_recommended_config_flags)

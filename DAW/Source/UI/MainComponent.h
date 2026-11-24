@@ -7,6 +7,7 @@
 #include "PianoRoll.h"
 #include "HomeView.h"
 #include "ParamWatcher.h"
+#include "MackieControl.h"
 
 namespace wdaw::ui
 {
@@ -65,6 +66,8 @@ private:
     MidiLearn midiLearn;
     ThumbnailStore thumbnails;
     MeterModel meters { engine };
+    MackieControl mackie;
+    juce::String applySurface();
     juce::TooltipWindow tooltips { this, 600 };
 
     std::unique_ptr<Session> session;

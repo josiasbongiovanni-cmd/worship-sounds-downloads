@@ -12,7 +12,11 @@ MainComponent::MainComponent()
         juce::MessageManager::callAsync ([this, err] { showError ("No se pudo abrir el dispositivo de audio: " + err + "\nElige otro en Preferencias › Audio."_u); });
     engine.setUseReportedLatency (settings.file().getBoolValue ("useReportedLatency", true));
     engine.setRecordingOffsetMs (settings.file().getDoubleValue ("recordOffsetMs", 0));
-    engine.refreshMidiInputs (juce::StringArray::fromTokens (settings.file().getValue ("midiDisabled"), "|", ""));
+    engine.refreshMidiInputs (settings.excludedMidiInputs());
+    mackie.trackLevel = [this] (const juce::Uuid& id) { return meters.track (id); };
+    settings.applySurface = [this] { return applySurface(); };
+    settings.surfaceStatus = [this] { return mackie.statusText; };
+    applySurface();
     engine.midiFilter = [this] (const juce::MidiMessage& m) { return midiLearn.filter (m); };
     engine.onError = [this] (juce::String e) { showError (e); };
     midiLearn.onAction = [this] (const MidiMapping& m, float v) { if (session) session->handleMidiAction (m, v); };
@@ -102,6 +106,7 @@ void MainComponent::buildEditor()
 {
     ctx = std::make_unique<Context> (Context { *session, meters, thumbnails });
     paramWatcher = std::make_unique<ParamWatcher> (*session);
+    mackie.setSession (session.get());
     ctx->openPluginWindow = [this] (const juce::Uuid& t, const juce::Uuid& s) { openPluginWindow (t, s); };
     ctx->choosePlugin = [this] (const juce::Uuid& t, bool inst) { choosePluginFor (t, inst); };
     ctx->addMasterPlugin = [this] { choosePluginFor (juce::Uuid::null(), false); };
@@ -139,6 +144,7 @@ void MainComponent::closeProject()
     transport.reset();
     ctx.reset();
     paramWatcher.reset();
+    mackie.setSession (nullptr);
     session.reset();          // guarda (con el estado de los plugins) al cerrarse
     if (home) { home->refresh(); home->setVisible (true); }
     if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->setName ("Worship DAW");
@@ -229,7 +235,17 @@ void MainComponent::importDialog()
 void MainComponent::timerCallback()
 {
     // Conectar controladores MIDI enchufados mientras la app está abierta
-    engine.refreshMidiInputs (juce::StringArray::fromTokens (settings.file().getValue ("midiDisabled"), "|", ""));
+    engine.refreshMidiInputs (settings.excludedMidiInputs());
+    // La superficie se desconectó (cable USB): reintentar cuando vuelve
+    if (settings.file().getBoolValue ("mcuEnabled") && ! mackie.isConnected() && settings.file().getValue ("mcuIn").isNotEmpty())
+        for (auto& d : juce::MidiInput::getAvailableDevices())
+            if (d.identifier == settings.file().getValue ("mcuIn")) { applySurface(); break; }
+}
+
+juce::String MainComponent::applySurface()
+{
+    if (! settings.file().getBoolValue ("mcuEnabled")) { mackie.closeDevices(); return mackie.statusText; }
+    return mackie.openDevices (settings.file().getValue ("mcuIn"), settings.file().getValue ("mcuOut"));
 }
 
 //==============================================================================
