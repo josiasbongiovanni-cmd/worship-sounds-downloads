@@ -200,7 +200,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto* t = track();
-        const bool selected = ! isMaster && ctx.session.selectedTrack == trackId;
+        const bool selected = ! isMaster && ctx.session.isTrackSelected (trackId);
         const auto colour = isMaster ? colours::accent : (t != nullptr ? colours::named (t->colour) : colours::accent);
         auto r = getLocalBounds().toFloat().reduced (0.5f);
         if (isMaster) g.setGradientFill (juce::ColourGradient (colours::elevated, r.getTopLeft(), colours::panel, r.getBottomLeft(), false));
@@ -311,12 +311,13 @@ public:
         }
         if (t != nullptr && t->isBus())
         {
-            auto tag = juce::Rectangle<float> (0, 0, 28, 12).withCentre ({ getWidth() / 2.0f, 11.5f });
+            const juce::String tagText = t->isFolder ? "CARPETA" : "BUS";
+            auto tag = juce::Rectangle<float> (0, 0, t->isFolder ? 50.0f : 28.0f, 12).withCentre ({ getWidth() / 2.0f, 11.5f });
             g.setColour (colours::text3.withAlpha (0.25f));
             g.fillRoundedRectangle (tag, 6);
             g.setColour (colours::text2);
             g.setFont (font (8.5f, true));
-            g.drawText ("BUS", tag, juce::Justification::centred);
+            g.drawText (tagText, tag, juce::Justification::centred);
         }
     }
 
@@ -524,13 +525,15 @@ void Mixer::paint (juce::Graphics& g)
 
 void Mixer::rebuild()
 {
-    auto& tracks = ctx.session.project().tracks;
-    bool same = strips.size() == (int) tracks.size();
-    for (int i = 0; same && i < strips.size(); ++i) same = strips[i]->trackId == tracks[(size_t) i].id;
+    auto& proj = ctx.session.project();
+    std::vector<juce::Uuid> visible;   // las pistas dentro de una carpeta cerrada no se muestran
+    for (auto& t : proj.tracks) if (! proj.isInsideCollapsedFolder (t)) visible.push_back (t.id);
+    bool same = strips.size() == (int) visible.size();
+    for (int i = 0; same && i < strips.size(); ++i) same = strips[i]->trackId == visible[(size_t) i];
     if (! same)
     {
         strips.clear();
-        for (auto& t : tracks) content.addAndMakeVisible (strips.add (new ChannelStrip (ctx, t.id, false)));
+        for (auto& id : visible) content.addAndMakeVisible (strips.add (new ChannelStrip (ctx, id, false)));
         if (master == nullptr) { master = std::make_unique<ChannelStrip> (ctx, juce::Uuid::null(), true); content.addAndMakeVisible (*master); }
     }
     for (auto* s : strips) s->update();

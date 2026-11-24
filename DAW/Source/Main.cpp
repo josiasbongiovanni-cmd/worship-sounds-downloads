@@ -79,8 +79,13 @@ static juce::File makeDemoProject()
         edit::automation::addPoint (pad, p.sections[3].start, -4.0);
         edit::automation::addPoint (pad, p.sections[4].start, -10.0);
         p.tracks[6].automationMode = AutomationMode::touch;
+        pad.points[1].shape = CurveShape::bezier;   // el pad crece en curva hacia el coro
+        pad.points[1].tension = -0.6;
+        voz.points[1].shape = CurveShape::slowStartEnd;
     }
     edit::addMarker (p, p.sections[1].start + 16, "Respiración"_u);
+    // Carpeta con las guitarras (como en REAPER)
+    edit::makeFolder (p, { p.tracks[2].id, p.tracks[3].id }, "Guitarras");
     p.loopStart = p.sections[3].start; p.loopEnd = p.sections[3].end(); p.loopEnabled = true;
     io::save (p, folder);
     return folder;

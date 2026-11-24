@@ -27,13 +27,14 @@ void DelayLine::process (float* const* ch, int numChannels, int n, int delay) no
 float Envelope::at (juce::int64 pos) const noexcept
 {
     if (points.empty()) return 0;
-    if (pos <= points.front().first) return points.front().second;
-    if (pos >= points.back().first) return points.back().second;
-    auto it = std::upper_bound (points.begin(), points.end(), pos, [] (juce::int64 p, const auto& e) { return p < e.first; });
+    if (pos <= points.front().pos) return points.front().value;
+    if (pos >= points.back().pos) return points.back().value;
+    auto it = std::upper_bound (points.begin(), points.end(), pos, [] (juce::int64 p, const Point& e) { return p < e.pos; });
     const auto& b = *it;
     const auto& a = *(it - 1);
-    if (b.first <= a.first) return b.second;
-    return a.second + (b.second - a.second) * (float) (pos - a.first) / (float) (b.first - a.first);
+    if (b.pos <= a.pos) return b.value;
+    const auto x = (double) (pos - a.pos) / (double) (b.pos - a.pos);
+    return a.value + (b.value - a.value) * (float) AutomationPoint::curve (a.shape, a.tension, x);
 }
 
 void TrackDSP::prepare (double sr, int maxBlock)
@@ -325,7 +326,7 @@ void AudioEngine::rebuildSnapshot()
     {
         Envelope e;
         if (lane != nullptr)
-            for (auto& pt : lane->points) e.points.push_back ({ toSamples (pt.time), (float) pt.value });
+            for (auto& pt : lane->points) e.points.push_back ({ toSamples (pt.time), (float) pt.value, pt.shape, (float) pt.tension });
         return e;
     };
 
@@ -441,8 +442,8 @@ void AudioEngine::rebuildSnapshot()
         auto& pt = s->tracks[(size_t) i];
         pt.output.target = PlaySnapshot::Track::Connection::master;
         if (t.directOutPair >= 2) pt.output.target = PlaySnapshot::Track::Connection::direct;
-        else if (! t.outputBus.isNull())
-            if (auto bi = project.trackIndex (t.outputBus); bi >= 0 && bi != i && project.tracks[(size_t) bi].isBus())
+        else if (const auto out = project.outputOf (t); ! out.isNull())
+            if (auto bi = project.trackIndex (out); bi >= 0 && bi != i && project.tracks[(size_t) bi].isBus())
                 pt.output.target = bi;
         if (pt.output.target >= 0) edges[(size_t) i].push_back (pt.output.target);
         for (auto& snd : t.sends)

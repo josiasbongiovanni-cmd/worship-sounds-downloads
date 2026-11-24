@@ -61,8 +61,8 @@ void addTrackInputMenus (juce::PopupMenu& menu, Session& s, const Track& t)
 juce::String outputLabel (const Project& p, const Track& t)
 {
     if (t.directOutPair >= 2) return "Salidas " + juce::String (t.directOutPair * 2 - 1) + "/" + juce::String (t.directOutPair * 2);
-    if (! t.outputBus.isNull())
-        if (auto* b = p.findTrack (t.outputBus)) return juce::String::fromUTF8 ("→ ") + b->name;
+    if (const auto out = p.outputOf (t); ! out.isNull())
+        if (auto* b = p.findTrack (out)) return juce::String::fromUTF8 ("→ ") + b->name;
     return "Master";
 }
 
@@ -72,7 +72,8 @@ void addRoutingMenu (juce::PopupMenu& menu, Session& s, const Track& t)
     const auto& p = s.project();
     juce::PopupMenu outs;
     const bool toMaster = t.directOutPair < 2 && t.outputBus.isNull();
-    outs.addItem ("Master", true, toMaster, [&s, id]
+    auto* parentFolder = p.findTrack (t.parent);
+    outs.addItem (parentFolder != nullptr ? "Carpeta: " + parentFolder->name : juce::String ("Master"), true, toMaster, [&s, id]
     {
         s.edit ([id] (Project& x) { if (auto* tr = x.findTrack (id)) { tr->directOutPair = 0; tr->outputBus = juce::Uuid::null(); } });
     });

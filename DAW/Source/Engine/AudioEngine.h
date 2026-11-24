@@ -27,7 +27,8 @@ struct DelayLine : juce::ReferenceCountedObject
 /** Envolvente de automatización ya convertida a muestras (interpolación lineal). */
 struct Envelope
 {
-    std::vector<std::pair<juce::int64, float>> points;
+    struct Point { juce::int64 pos; float value; CurveShape shape; float tension; };
+    std::vector<Point> points;
     bool empty() const noexcept { return points.empty(); }
     float at (juce::int64 pos) const noexcept;
 };

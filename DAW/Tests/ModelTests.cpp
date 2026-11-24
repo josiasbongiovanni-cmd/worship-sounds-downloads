@@ -186,6 +186,92 @@ struct MidiEditTests : juce::UnitTest
             expect (p.findTrack (voz)->outputBus.isNull());
         }
 
+        beginTest ("Carpetas: agrupar, mover en bloque, sacar y borrar");
+        {
+            auto p = edit::makeProject (edit::Template::empty, "Carpetas", 70, "A", 4);
+            auto a = p.tracks[0].id;
+            auto b = edit::addTrack (p, "Coro 1").id;
+            auto c = edit::addTrack (p, "Coro 2").id;
+            auto d = edit::addTrack (p, "Bajo").id;
+            auto folder = edit::makeFolder (p, { b, c }, "Coros");
+            // Orden: Audio 1, Coros, Coro 1, Coro 2, Bajo
+            expectEquals (p.trackIndex (folder), 1);
+            expectEquals (p.trackIndex (b), 2);
+            expectEquals (p.trackIndex (c), 3);
+            expect (p.findTrack (folder)->isFolder && p.findTrack (folder)->isBus());
+            expect (p.outputOf (*p.findTrack (b)) == folder);       // suena a través de la carpeta
+            expectEquals (p.folderDepth (*p.findTrack (c)), 1);
+            expect (edit::trackBlock (p, folder) == std::make_pair (1, 3));
+            // Mover la carpeta mueve su contenido
+            edit::moveTrackBlock (p, folder, 2);   // índice en la lista sin el bloque (Audio 1, Bajo): queda al final
+            expectEquals (p.trackIndex (d), 1);
+            expectEquals (p.trackIndex (folder), 2);
+            expectEquals (p.trackIndex (c), 4);
+            // Una carpeta no puede entrar en sí misma
+            expect (! edit::setParent (p, folder, b));
+            // Carpeta dentro de carpeta
+            auto outer = edit::makeFolder (p, { folder, a }, "Voces");
+            expectEquals (p.folderDepth (*p.findTrack (b)), 2);
+            expect (p.isDescendantOf (*p.findTrack (c), outer));
+            // Cerrar la carpeta de afuera oculta a las de adentro
+            p.findTrack (outer)->folderCollapsed = true;
+            expect (p.isInsideCollapsedFolder (*p.findTrack (b)));
+            p.findTrack (outer)->folderCollapsed = false;
+            // Sacar de la carpeta
+            edit::unparent (p, c);
+            expect (p.findTrack (c)->parent == outer);
+            expect (p.outputOf (*p.findTrack (c)) == outer);
+            // Borrar la carpeta: las hijas suben un nivel
+            edit::removeTrack (p, folder);
+            expect (p.findTrack (b)->parent == outer);
+            // Mover una pista fuera de su carpeta la saca (normalizar)
+            edit::moveTrack (p, b, (int) p.tracks.size() - 1);
+            edit::normalizeFolders (p);
+            if (p.trackIndex (b) == (int) p.tracks.size() - 1 && p.tracks[p.tracks.size() - 2].id != outer)
+                expect (p.findTrack (b)->parent.isNull() || p.isDescendantOf (*p.findTrack (b), outer));
+            // Ida y vuelta JSON
+            auto r = io::fromJSON (io::toJSON (p));
+            expect (r.has_value() && r->findTrack (outer)->isFolder);
+            expect (r->findTrack (c)->parent == outer);
+        }
+
+        beginTest ("Curvas de automatización"_u);
+        {
+            AutomationLane l;
+            l.target.kind = AutomationTarget::Kind::pan;
+            l.points = { { 0, -1 }, { 4, 1 } };
+            expectWithinAbsoluteError (l.valueAt (1), -0.5, 1.0e-9);                 // lineal
+            l.points[0].shape = CurveShape::square;
+            expectWithinAbsoluteError (l.valueAt (3.99), -1.0, 1.0e-9);              // escalón: se mantiene
+            l.points[0].shape = CurveShape::slowStartEnd;
+            expectWithinAbsoluteError (l.valueAt (2), 0.0, 1.0e-9);                  // simétrica: mitad en el medio
+            expect (l.valueAt (0.5) < -0.5 + 0.25 * 0.5);                           // empieza lenta
+            l.points[0].shape = CurveShape::fastStart;
+            expect (l.valueAt (1) > -0.5);
+            l.points[0].shape = CurveShape::fastEnd;
+            expect (l.valueAt (1) < -0.5);
+            l.points[0].shape = CurveShape::bezier; l.points[0].tension = 0.8;
+            expect (l.valueAt (1) > -0.5);
+            l.points[0].tension = -0.8;
+            expect (l.valueAt (1) < -0.5);
+            // Las curvas se guardan
+            auto p = edit::makeProject (edit::Template::empty, "Curvas", 70, "A", 4);
+            p.tracks[0].automation.push_back (l);
+            auto r = io::fromJSON (io::toJSON (p));
+            expect (r.has_value());
+            if (r.has_value())
+            {
+                auto& rp = r->tracks[0].automation[0].points[0];
+                expect (rp.shape == CurveShape::bezier);
+                expectWithinAbsoluteError (rp.tension, -0.8, 1.0e-9);
+            }
+            // Simplificar no toca curvas
+            AutomationLane c;
+            for (int i = 0; i <= 4; ++i) c.points.push_back ({ (double) i, (double) i, CurveShape::fastEnd, 0 });
+            edit::automation::simplify (c, 0.01);
+            expectEquals ((int) c.points.size(), 5);
+        }
+
         beginTest ("Automatización: puntos, escritura y simplificación"_u);
         {
             AutomationLane l;

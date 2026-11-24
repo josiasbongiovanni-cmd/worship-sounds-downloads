@@ -12,10 +12,18 @@ Un solo código en C++ (JUCE 8) para macOS y Windows.
   - El solo respeta los buses, y la latencia de los plugins se compensa en todo el ruteo.
   - Reverb y Delay incluidos.
   - Las plantillas con voces traen un bus "Reverb".
+- **Carpetas de pistas (como REAPER):**
+  - Las pistas de una carpeta suenan a través de ella (volumen, mute, plugins y envíos de la carpeta).
+  - Se abren y se cierran con el triángulo; cerradas muestran un resumen de los ítems de adentro.
+  - Se pueden anidar.
+  - Al arrastrar una pista debajo de una carpeta abierta, entra en ella.
+  - Ctrl/Cmd o Shift + clic selecciona varias pistas. Menú de la pista › Carpeta › "Nueva carpeta con las pistas seleccionadas".
 - **Automatización:**
   - Carriles debajo de cada pista para volumen, paneo, envíos y cualquier parámetro de plugin.
   - Modos Apagado, Leer, Touch y Latch.
   - Clic agrega un punto, arrastrar lo mueve, Alt+clic o doble clic lo borra.
+  - Curvas: clic derecho › Forma del tramo (lineal, suave, rápida al inicio o al final, con tensión, escalón).
+  - Ctrl/Cmd + arrastrar un tramo lo curva.
   - Los faders siguen a la automatización durante la reproducción.
 - **Plugins VST3 y AU** (inserts por pista, instrumento por pista, cadena en el master), con compensación de latencia (PDC). Los estados se guardan dentro del proyecto.
 - **Interfaces de audio:** CoreAudio (Mac), WASAPI y DirectSound (Windows); entradas mono/estéreo por pista, monitoreo (apagado/encendido/automático), salidas directas para click y guía (in-ears).
@@ -59,7 +67,7 @@ build\WorshipDAW_artefacts\Release\"Worship DAW.exe"
 - ASIO en Windows: requiere el SDK de Steinberg y aceptar su licencia; hoy se usa WASAPI. Activar con `JUCE_ASIO=1` y la ruta del SDK.
 - Escaneo de plugins en un proceso separado. Hoy, si un plugin se cuelga al escanearlo, queda marcado y se salta la próxima vez.
 - Firma y notarización en Mac (cuenta de Apple Developer) y firma de código en Windows.
-- Carpetas de pistas, superficies Mackie Control, exportar a MP3 y automatización con curvas (hoy los tramos son rectos).
+- Superficies Mackie Control y exportar a MP3.
 
 ## Código
 

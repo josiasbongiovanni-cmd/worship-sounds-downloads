@@ -107,11 +107,14 @@ public:
     //--- Selección
     std::vector<juce::Uuid> selectedClips;
     juce::Uuid selectedTrack;
+    /** Pistas seleccionadas (Ctrl/Cmd o Shift + clic en la cabecera). Siempre incluye selectedTrack. */
+    std::vector<juce::Uuid> selectedTracks;
+    bool isTrackSelected (const juce::Uuid&) const;
     bool isSelected (const juce::Uuid& clip) const;
     void selectClip (const juce::Uuid&, bool add);
     void selectClips (std::vector<juce::Uuid>);
     void clearClipSelection();
-    void selectTrack (const juce::Uuid&);
+    void selectTrack (const juce::Uuid&, bool add = false, bool range = false);
 
     //--- Ítems
     void splitAtCursor();          // S
@@ -127,6 +130,15 @@ public:
     void removeTrack (const juce::Uuid&);
     void updateTrack (const juce::Uuid&, const std::function<void (Track&)>&, bool undoable = true);
     void moveTrack (const juce::Uuid&, int newIndex);
+    /** Arrastrar la cabecera: mueve la pista (con su contenido si es carpeta) junto a `underIndex` y adopta la carpeta. */
+    void dragTrackTo (const juce::Uuid&, int underIndex, bool undoable);
+
+    //--- Carpetas
+    /** Nueva carpeta con las pistas seleccionadas (o la indicada). */
+    juce::Uuid groupInFolder (std::vector<juce::Uuid> tracks = {});
+    void moveIntoFolder (const juce::Uuid& track, const juce::Uuid& folder);
+    void takeOutOfFolder (const juce::Uuid& track);
+    void toggleFolderCollapsed (const juce::Uuid& folder);
 
     //--- Ruteo (buses y envíos)
     std::optional<juce::Uuid> addSend (const juce::Uuid& from, const juce::Uuid& bus, bool preFader = false);

@@ -1,4 +1,5 @@
 #include "Serialization.h"
+#include "Editing.h"
 
 namespace wdaw::io
 {
@@ -113,6 +114,8 @@ var toVar (const Project& p)
         set (o, "directOutPair", t.directOutPair);
         if (! t.outputBus.isNull()) set (o, "outputBus", t.outputBus.toDashedString());
         set (o, "automationMode", toString (t.automationMode));
+        if (t.isFolder) { set (o, "folder", true); set (o, "folderCollapsed", t.folderCollapsed); }
+        if (! t.parent.isNull()) set (o, "parent", t.parent.toDashedString());
         juce::Array<var> sends;
         for (auto& s : t.sends)
         {
@@ -133,7 +136,12 @@ var toVar (const Project& p)
             if (l.target.param >= 0) { set (lo, "param", l.target.param); set (lo, "paramName", l.target.paramName); }
             set (lo, "visible", l.visible); set (lo, "active", l.active);
             juce::Array<var> pts;
-            for (auto& pt : l.points) { juce::Array<var> pair { pt.time, pt.value }; pts.add (var (pair)); }
+            for (auto& pt : l.points)
+            {
+                juce::Array<var> item { pt.time, pt.value };
+                if (pt.shape != CurveShape::linear) { item.add (toString (pt.shape)); item.add (pt.tension); }
+                pts.add (var (item));
+            }
             set (lo, "points", list (pts));
             lanes.add (lo);
         }
@@ -340,6 +348,8 @@ Project fromVar (const var& root)
             t.directOutPair = integer (o, "directOutPair");
             if (o.hasProperty ("outputBus")) t.outputBus = uuid (o, "outputBus");
             t.automationMode = automationModeFromString (str (o, "automationMode", "read"));
+            t.isFolder = flag (o, "folder"); t.folderCollapsed = flag (o, "folderCollapsed");
+            if (o.hasProperty ("parent")) t.parent = uuid (o, "parent");
             if (auto* sends = o.getProperty ("sends", var()).getArray())
                 for (auto& so : *sends)
                 {
@@ -363,7 +373,12 @@ Project fromVar (const var& root)
                     l.visible = flag (lo, "visible", true); l.active = flag (lo, "active", true);
                     if (auto* pts = lo.getProperty ("points", var()).getArray())
                         for (auto& pt : *pts)
-                            if (pt.isArray() && pt.size() >= 2) l.points.push_back ({ (double) pt[0], (double) pt[1] });
+                            if (pt.isArray() && pt.size() >= 2)
+                            {
+                                AutomationPoint ap { (double) pt[0], (double) pt[1] };
+                                if (pt.size() >= 4) { ap.shape = curveShapeFromString (pt[2].toString()); ap.tension = (double) pt[3]; }
+                                l.points.push_back (ap);
+                            }
                     l.sortPoints();
                     t.automation.push_back (std::move (l));
                 }
@@ -425,6 +440,7 @@ Project fromVar (const var& root)
             m.id = uuid (o); m.number = integer (o, "number", 1); m.name = str (o, "name"); m.position = num (o, "position");
             p.markers.push_back (m);
         }
+    edit::normalizeFolders (p);
     return p;
 }
 

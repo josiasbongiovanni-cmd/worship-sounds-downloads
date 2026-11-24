@@ -174,10 +174,21 @@ struct AutomationTarget
     juce::String formatValue (double value) const;
 };
 
+/** Forma del tramo que empieza en un punto (como en REAPER). */
+enum class CurveShape { linear, square, slowStartEnd, fastStart, fastEnd, bezier };
+juce::String toString (CurveShape);
+CurveShape curveShapeFromString (const juce::String&);
+juce::String displayName (CurveShape);
+
 struct AutomationPoint
 {
     Beats time = 0;
     double value = 0;
+    CurveShape shape = CurveShape::linear;   // forma hasta el punto siguiente
+    double tension = 0;                      // solo "bezier": -1 (lenta al inicio) … 1 (rápida al inicio)
+
+    /** Avance 0…1 del tramo para una fracción de tiempo 0…1. */
+    static double curve (CurveShape, double tension, double x) noexcept;
 };
 
 struct AutomationLane
@@ -217,6 +228,11 @@ struct Track
     std::vector<Send> sends;
     std::vector<AutomationLane> automation;
     AutomationMode automationMode = AutomationMode::read;
+    /** Carpetas (como REAPER): una pista de bus marcada como carpeta agrupa las pistas que la siguen.
+        Las pistas hijas suenan a través de la carpeta (salvo que se mande su salida a otro lado). */
+    bool isFolder = false;
+    bool folderCollapsed = false;
+    juce::Uuid parent = juce::Uuid::null();
 
     bool isInstrument() const noexcept { return role == TrackRole::instrument; }
     bool isBus() const noexcept { return role == TrackRole::bus; }
@@ -271,6 +287,14 @@ struct Project
     int trackIndex (const juce::Uuid&) const;
     bool hasSolo() const;
     bool isAudible (const Track&) const;
+
+    /** Destino de la salida: bus elegido, o la carpeta que la contiene, o nulo (= Master / salida directa). */
+    juce::Uuid outputOf (const Track&) const;
+    /** Profundidad de carpeta (0 = arriba de todo). */
+    int folderDepth (const Track&) const;
+    bool isInsideCollapsedFolder (const Track&) const;
+    /** ¿`ancestor` contiene (directa o indirectamente) a `t`? */
+    bool isDescendantOf (const Track& t, const juce::Uuid& ancestor) const;
 
     /** Buses a los que manda una pista (salida + envíos). */
     std::vector<juce::Uuid> destinations (const Track&) const;

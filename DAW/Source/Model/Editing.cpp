@@ -26,6 +26,10 @@ Track& addTrack (Project& p, const juce::String& name, TrackRole role, juce::Str
 
 void removeTrack (Project& p, const juce::Uuid& id)
 {
+    // Las hijas de una carpeta borrada pasan a la carpeta de arriba.
+    juce::Uuid grandParent = juce::Uuid::null();
+    if (auto* t = p.findTrack (id)) grandParent = t->parent;
+    for (auto& t : p.tracks) if (t.parent == id) t.parent = grandParent;
     p.tracks.erase (std::remove_if (p.tracks.begin(), p.tracks.end(), [&] (auto& t) { return t.id == id; }), p.tracks.end());
     // Lo que mandaba a ese bus vuelve al Master; sus envíos (y sus carriles) se quitan.
     for (auto& t : p.tracks)
@@ -34,6 +38,133 @@ void removeTrack (Project& p, const juce::Uuid& id)
         for (auto& s : std::vector<Send> (t.sends))
             if (s.target == id) removeSend (p, t.id, s.id);
     }
+}
+
+//==============================================================================
+std::pair<int, int> trackBlock (const Project& p, const juce::Uuid& id)
+{
+    const auto first = p.trackIndex (id);
+    if (first < 0) return { -1, -1 };
+    int last = first;
+    while (last + 1 < (int) p.tracks.size() && p.isDescendantOf (p.tracks[(size_t) last + 1], id)) ++last;
+    return { first, last };
+}
+
+void moveTrackBlock (Project& p, const juce::Uuid& id, int newIndex)
+{
+    const auto [first, last] = trackBlock (p, id);
+    if (first < 0) return;
+    std::vector<Track> block (std::make_move_iterator (p.tracks.begin() + first), std::make_move_iterator (p.tracks.begin() + last + 1));
+    p.tracks.erase (p.tracks.begin() + first, p.tracks.begin() + last + 1);
+    // newIndex se refiere a la lista sin el bloque
+    newIndex = juce::jlimit (0, (int) p.tracks.size(), newIndex);
+    p.tracks.insert (p.tracks.begin() + newIndex, std::make_move_iterator (block.begin()), std::make_move_iterator (block.end()));
+}
+
+bool setParent (Project& p, const juce::Uuid& trackId, const juce::Uuid& folderId)
+{
+    auto* t = p.findTrack (trackId);
+    auto* f = p.findTrack (folderId);
+    if (t == nullptr || f == nullptr || trackId == folderId || ! f->isBus()) return false;
+    if (p.isDescendantOf (*f, trackId)) return false;          // la carpeta está dentro de la pista
+    // Sin bucles de señal: la carpeta no puede alimentar (por envíos) a la pista.
+    if (p.feedsInto (folderId, trackId)) return false;
+    f->isFolder = true;
+    t->parent = folderId;
+    if (t->outputBus == folderId) t->outputBus = juce::Uuid::null();
+    t->directOutPair = t->directOutPair >= 2 ? t->directOutPair : 0;
+    // Al final del contenido de la carpeta (sin contar la propia pista)
+    const auto [tf, tl] = trackBlock (p, trackId);
+    std::vector<Track> block (std::make_move_iterator (p.tracks.begin() + tf), std::make_move_iterator (p.tracks.begin() + tl + 1));
+    p.tracks.erase (p.tracks.begin() + tf, p.tracks.begin() + tl + 1);
+    const auto [ff, fl] = trackBlock (p, folderId);
+    p.tracks.insert (p.tracks.begin() + fl + 1, std::make_move_iterator (block.begin()), std::make_move_iterator (block.end()));
+    return true;
+}
+
+void unparent (Project& p, const juce::Uuid& trackId)
+{
+    auto* t = p.findTrack (trackId);
+    if (t == nullptr || t->parent.isNull()) return;
+    const auto folder = t->parent;
+    auto* f = p.findTrack (folder);
+    t->parent = f != nullptr ? f->parent : juce::Uuid::null();
+    // Queda justo después del contenido de la carpeta
+    const auto [tf, tl] = trackBlock (p, trackId);
+    std::vector<Track> block (std::make_move_iterator (p.tracks.begin() + tf), std::make_move_iterator (p.tracks.begin() + tl + 1));
+    p.tracks.erase (p.tracks.begin() + tf, p.tracks.begin() + tl + 1);
+    const auto [ff, fl] = trackBlock (p, folder);
+    p.tracks.insert (p.tracks.begin() + (fl >= 0 ? fl + 1 : (int) p.tracks.size()), std::make_move_iterator (block.begin()), std::make_move_iterator (block.end()));
+}
+
+juce::Uuid makeFolder (Project& p, const std::vector<juce::Uuid>& ids, const juce::String& name)
+{
+    int at = (int) p.tracks.size();
+    juce::Uuid outer = juce::Uuid::null();
+    for (auto& id : ids)
+        if (const auto i = p.trackIndex (id); i >= 0 && i < at) { at = i; outer = p.tracks[(size_t) i].parent; }
+    auto& f = addTrack (p, name, TrackRole::bus, "slate");
+    f.isFolder = true;
+    f.parent = outer;
+    const auto fid = f.id;
+    moveTrackBlock (p, fid, at);
+    // En el orden en que estaban
+    std::vector<juce::Uuid> ordered;
+    for (auto& t : p.tracks)
+        if (std::find (ids.begin(), ids.end(), t.id) != ids.end() && t.id != fid) ordered.push_back (t.id);
+    for (auto& id : ordered)
+    {
+        auto* t = p.findTrack (id);
+        // Si una carpeta elegida ya contiene a otra elegida, se mueve el bloque de afuera.
+        bool parentChosen = false;
+        if (t != nullptr) for (auto& o : ordered) if (o != id && p.isDescendantOf (*t, o)) parentChosen = true;
+        if (! parentChosen) setParent (p, id, fid);
+    }
+    return fid;
+}
+
+void normalizeFolders (Project& p)
+{
+    std::vector<juce::Uuid> open;   // carpetas abiertas (de afuera hacia adentro)
+    for (auto& t : p.tracks)
+    {
+        if (! t.parent.isNull())
+        {
+            auto it = std::find (open.begin(), open.end(), t.parent);
+            auto* f = p.findTrack (t.parent);
+            if (it == open.end() || f == nullptr || ! f->isBus()) { t.parent = juce::Uuid::null(); open.clear(); }
+            else open.erase (it + 1, open.end());
+        }
+        else open.clear();
+        if (t.isBus() && t.isFolder) open.push_back (t.id);
+    }
+    for (auto& t : p.tracks)
+    {
+        if (! t.isBus()) { t.isFolder = false; t.folderCollapsed = false; }
+        if (! t.parent.isNull() && p.feedsInto (t.parent, t.id)) t.parent = juce::Uuid::null();   // bucle: se rompe
+    }
+}
+
+void adoptFolderFromAbove (Project& p, const juce::Uuid& id)
+{
+    const auto i = p.trackIndex (id);
+    if (i < 0) return;
+    auto& t = p.tracks[(size_t) i];
+    juce::Uuid parent = juce::Uuid::null();
+    if (i > 0)
+    {
+        auto& above = p.tracks[(size_t) i - 1];
+        if (above.isBus() && above.isFolder && ! above.folderCollapsed && above.id != id) parent = above.id;
+        else parent = above.parent;
+        // Encima hay una carpeta cerrada: se queda al mismo nivel que ella
+        if (above.isBus() && above.isFolder && above.folderCollapsed) parent = above.parent;
+        if (p.isInsideCollapsedFolder (above)) parent = juce::Uuid::null();
+    }
+    if (parent == id) parent = juce::Uuid::null();
+    if (! parent.isNull())
+        if (auto* f = p.findTrack (parent); f == nullptr || p.isDescendantOf (*f, id)) parent = juce::Uuid::null();
+    t.parent = parent;
+    normalizeFolders (p);
 }
 
 //==============================================================================
@@ -124,6 +255,8 @@ namespace automation
             const auto& a = out.back();
             const auto& b = l.points[i];
             const auto& c = l.points[i + 1];
+            // Solo se quitan puntos en tramos rectos (las curvas se respetan)
+            if (a.shape != CurveShape::linear || b.shape != CurveShape::linear) { out.push_back (b); continue; }
             const auto span = c.time - a.time;
             const auto expected = span > 1.0e-9 ? a.value + (c.value - a.value) * (b.time - a.time) / span : a.value;
             if (std::abs (expected - b.value) > tolerance) out.push_back (b);

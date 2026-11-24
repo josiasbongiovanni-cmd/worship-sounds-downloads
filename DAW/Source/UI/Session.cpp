@@ -440,11 +440,86 @@ void Session::clearClipSelection()
     sendChangeMessage();
 }
 
-void Session::selectTrack (const juce::Uuid& id)
+bool Session::isTrackSelected (const juce::Uuid& id) const
 {
+    return id == selectedTrack || std::find (selectedTracks.begin(), selectedTracks.end(), id) != selectedTracks.end();
+}
+
+void Session::selectTrack (const juce::Uuid& id, bool add, bool range)
+{
+    if (range && proj.findTrack (selectedTrack) != nullptr)
+    {
+        // Shift: del último seleccionado hasta este
+        auto a = proj.trackIndex (selectedTrack), b = proj.trackIndex (id);
+        if (a > b) std::swap (a, b);
+        selectedTracks.clear();
+        for (int i = juce::jmax (0, a); i <= b && i < (int) proj.tracks.size(); ++i) selectedTracks.push_back (proj.tracks[(size_t) i].id);
+    }
+    else if (add)
+    {
+        if (selectedTracks.empty() && proj.findTrack (selectedTrack) != nullptr) selectedTracks.push_back (selectedTrack);
+        auto it = std::find (selectedTracks.begin(), selectedTracks.end(), id);
+        if (it != selectedTracks.end() && selectedTracks.size() > 1) { selectedTracks.erase (it); selectedTrack = selectedTracks.back(); refreshLiveMidi(); sendChangeMessage(); return; }
+        if (it == selectedTracks.end()) selectedTracks.push_back (id);
+    }
+    else selectedTracks = { id };
     selectedTrack = id;
     refreshLiveMidi();
     sendChangeMessage();
+}
+
+void Session::dragTrackTo (const juce::Uuid& id, int under, bool undoable)
+{
+    const auto [first, last] = edit::trackBlock (proj, id);
+    if (first < 0 || under < 0 || under >= (int) proj.tracks.size() || (under >= first && under <= last)) return;
+    int newIndex = under;
+    if (under > last)
+    {
+        const auto& u = proj.tracks[(size_t) under];
+        const auto after = u.isFolder && u.folderCollapsed ? edit::trackBlock (proj, u.id).second : under;
+        newIndex = after - (last - first + 1) + 1;
+    }
+    edit ([&] (Project& p)
+    {
+        edit::moveTrackBlock (p, id, newIndex);
+        edit::adoptFolderFromAbove (p, id);
+    }, undoable);
+}
+
+juce::Uuid Session::groupInFolder (std::vector<juce::Uuid> tracks)
+{
+    if (tracks.empty()) tracks = selectedTracks.empty() ? std::vector<juce::Uuid> { selectedTrack } : selectedTracks;
+    tracks.erase (std::remove_if (tracks.begin(), tracks.end(), [this] (auto& id) { return proj.findTrack (id) == nullptr; }), tracks.end());
+    if (tracks.empty()) return {};
+    juce::Uuid folder;
+    edit ([&] (Project& p)
+    {
+        int n = 0;
+        for (auto& t : p.tracks) if (t.isFolder) ++n;
+        folder = edit::makeFolder (p, tracks, n == 0 ? juce::String ("Carpeta") : "Carpeta " + juce::String (n + 1));
+    });
+    selectTrack (folder);
+    return folder;
+}
+
+void Session::moveIntoFolder (const juce::Uuid& track, const juce::Uuid& folder)
+{
+    if (auto* f = proj.findTrack (folder); f == nullptr || proj.isDescendantOf (*f, track) || proj.feedsInto (folder, track))
+    {
+        if (showError) showError (juce::String::fromUTF8 ("No se puede: la carpeta está dentro de esa pista o crearía un bucle de señal."));
+        return;
+    }
+    edit ([&] (Project& p) { edit::setParent (p, track, folder); });
+}
+
+void Session::takeOutOfFolder (const juce::Uuid& track)
+{
+    edit ([&] (Project& p) { edit::unparent (p, track); });
+}
+
+void Session::toggleFolderCollapsed (const juce::Uuid& folder)
+{
+    updateTrack (folder, [] (Track& t) { t.folderCollapsed = ! t.folderCollapsed; }, false);
 }
 
 void Session::selectAllClips()
@@ -802,7 +877,7 @@ void Session::finishWriters()
 
 void Session::moveTrack (const juce::Uuid& id, int newIndex)
 {
-    edit ([&] (Project& p) { edit::moveTrack (p, id, newIndex); });
+    edit ([&] (Project& p) { edit::moveTrackBlock (p, id, newIndex); edit::normalizeFolders (p); });
 }
 
 //==============================================================================

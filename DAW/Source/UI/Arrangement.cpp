@@ -45,6 +45,9 @@ public:
     }
 
     const Track* track() const { return ctx.session.project().findTrack (trackId); }
+    int indent() const { auto* t = track(); return t != nullptr ? juce::jmin (5, ctx.session.project().folderDepth (*t)) * 14 : 0; }
+    juce::Rectangle<int> contentArea() const { return getLocalBounds().reduced (12, 8).withTrimmedLeft (4 + indent()); }
+    juce::Rectangle<int> folderToggleArea() const { return contentArea().removeFromTop (22).removeFromLeft (16); }
     bool isWriteMode() const
     {
         auto* t = track();
@@ -81,7 +84,7 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (12, 8).withTrimmedLeft (4);
+        auto r = contentArea();
         r.removeFromTop (24);
         auto row = r.removeFromTop (22);
         auto* t = track();
@@ -97,18 +100,41 @@ public:
     {
         auto* t = track();
         if (t == nullptr) return;
-        const bool selected = ctx.session.selectedTrack == trackId;
+        const bool selected = ctx.session.isTrackSelected (trackId);
         const auto colour = colours::named (t->colour);
         g.fillAll (selected ? colours::elevated : colours::panel);
         g.setColour (colours::stroke);
         g.fillRect (0, getHeight() - 1, getWidth(), 1);
-        auto strip = juce::Rectangle<float> (6, 8, 4, (float) getHeight() - 16);
+        // Guías de carpeta (una línea por nivel)
+        for (int level = 0; level < indent() / 14; ++level)
+        {
+            g.setColour (colours::strokeHi);
+            g.fillRect (12.0f + (float) level * 14.0f, 0.0f, 1.0f, (float) getHeight());
+        }
+        auto strip = juce::Rectangle<float> (6.0f + (float) indent(), 8, 4, (float) getHeight() - 16);
         if (selected) { g.setColour (colour.withAlpha (0.5f)); g.fillRoundedRectangle (strip.expanded (2), 3); }
         g.setColour (colour);
         g.fillRoundedRectangle (strip, 2);
 
-        auto top = getLocalBounds().reduced (12, 8).withTrimmedLeft (4).removeFromTop (22).toFloat();
-        if (t->isInstrument() || t->role == TrackRole::guide || t->isBus())
+        auto top = contentArea().removeFromTop (22).toFloat();
+        if (t->isFolder)
+        {
+            // Triángulo para abrir / cerrar la carpeta y un ícono de carpeta
+            auto tri = top.removeFromLeft (16).withSizeKeepingCentre (10, 10);
+            juce::Path arrow;
+            if (t->folderCollapsed) arrow.addTriangle (tri.getX() + 2, tri.getY(), tri.getRight() - 1, tri.getCentreY(), tri.getX() + 2, tri.getBottom());
+            else arrow.addTriangle (tri.getX(), tri.getY() + 2, tri.getRight(), tri.getY() + 2, tri.getCentreX(), tri.getBottom() - 1);
+            g.setColour (colours::text2);
+            g.fillPath (arrow);
+            auto folderIcon = top.removeFromLeft (16).withSizeKeepingCentre (14, 11);
+            juce::Path f;
+            f.addRoundedRectangle (folderIcon.getX(), folderIcon.getY() + 2, folderIcon.getWidth(), folderIcon.getHeight() - 2, 2.0f);
+            f.addRoundedRectangle (folderIcon.getX(), folderIcon.getY(), folderIcon.getWidth() * 0.45f, 4.0f, 1.5f);
+            g.setColour (colour);
+            g.fillPath (f);
+            top.removeFromLeft (5);
+        }
+        else if (t->isInstrument() || t->role == TrackRole::guide || t->isBus())
         {
             auto icon = IconButton::path (t->isInstrument() ? IconButton::Icon::piano : t->isBus() ? IconButton::Icon::mixer : IconButton::Icon::guide,
                                           top.removeFromLeft (14).withSizeKeepingCentre (12, 10));
@@ -130,10 +156,15 @@ public:
                 g.fillPath (IconButton::path (IconButton::Icon::speaker, info.removeFromLeft (11).withSizeKeepingCentre (10, 9)));
             }
         }
-        else if (t->directOutPair >= 2 || ! t->outputBus.isNull() || ! t->sends.empty())
+        else if (t->directOutPair >= 2 || ! t->outputBus.isNull() || ! t->sends.empty() || (t->isFolder && t->folderCollapsed))
         {
             juce::String label;
-            if (t->directOutPair >= 2 || ! t->outputBus.isNull()) label = outputLabel (ctx.session.project(), *t);
+            if (t->isFolder && t->folderCollapsed)
+            {
+                const auto [first, last] = edit::trackBlock (ctx.session.project(), trackId);
+                label = juce::String (last - first) + (last - first == 1 ? " pista" : " pistas");
+            }
+            else if (t->directOutPair >= 2 || ! t->outputBus.isNull()) label = outputLabel (ctx.session.project(), *t);
             if (! t->sends.empty())
                 label << (label.isEmpty() ? "" : "  ") << juce::String ((int) t->sends.size()) << (t->sends.size() == 1 ? juce::String::fromUTF8 (" envío") : juce::String::fromUTF8 (" envíos"));
             g.setFont (font (10));
@@ -155,7 +186,7 @@ public:
         g.setFont (font (14, true));
         g.drawFittedText (t->name, top.toNearestInt(), juce::Justification::centredLeft, 1);
 
-        auto row = getLocalBounds().reduced (12, 8).withTrimmedLeft (4);
+        auto row = contentArea();
         row.removeFromTop (24);
         auto controls = row.removeFromTop (22);
         g.setColour (colours::text3);
@@ -180,8 +211,18 @@ public:
             if (e.mods.isPopupMenu()) showInputMenu();
             return;
         }
-        ctx.session.selectTrack (trackId);
-        if (e.mods.isPopupMenu()) { showMenu(); return; }
+        if (auto* t = track(); t != nullptr && t->isFolder && folderToggleArea().expanded (4).contains (e.getPosition()))
+        {
+            ctx.session.toggleFolderCollapsed (trackId);
+            return;
+        }
+        if (e.mods.isPopupMenu())
+        {
+            if (! ctx.session.isTrackSelected (trackId)) ctx.session.selectTrack (trackId);
+            showMenu();
+            return;
+        }
+        ctx.session.selectTrack (trackId, e.mods.isCommandDown() || e.mods.isCtrlDown(), e.mods.isShiftDown());
         dragStartIndex = ctx.session.project().trackIndex (trackId);
     }
 
@@ -193,9 +234,10 @@ public:
         const auto y = (float) e.getEventRelativeTo (getParentComponent()).position.y;
         auto under = arr->trackIndexAt (y);
         if (under < 0) under = y < 0 ? 0 : (int) ctx.session.project().tracks.size() - 1;
-        const auto target = juce::jlimit (0, (int) ctx.session.project().tracks.size() - 1, under);
-        if (target != ctx.session.project().trackIndex (trackId))
-            ctx.session.edit ([&] (Project& p) { edit::moveTrack (p, trackId, target); }, ! movedDuringDrag);
+        const auto before = ctx.session.project().trackIndex (trackId);
+        const auto parentBefore = track() != nullptr ? track()->parent : juce::Uuid::null();
+        ctx.session.dragTrackTo (trackId, juce::jlimit (0, (int) ctx.session.project().tracks.size() - 1, under), ! movedDuringDrag);
+        if (before == ctx.session.project().trackIndex (trackId) && track() != nullptr && track()->parent == parentBefore) return;
         movedDuringDrag = true;
         setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     }
@@ -256,6 +298,25 @@ public:
         }
         m.addItem ("Agregar plugin de efecto…"_u, [this] { if (ctx.choosePlugin) ctx.choosePlugin (trackId, false); });
         m.addSeparator();
+        {
+            juce::PopupMenu folders;
+            auto& s = ctx.session;
+            const auto count = juce::jmax ((size_t) 1, s.selectedTracks.size());
+            folders.addItem (count > 1 ? "Nueva carpeta con las " + juce::String ((int) count) + " pistas seleccionadas" : juce::String ("Nueva carpeta con esta pista"),
+                             [&s] { s.groupInFolder(); });
+            if (t->isFolder)
+                folders.addItem (t->folderCollapsed ? "Abrir carpeta" : "Cerrar carpeta", [&s, id = trackId] { s.toggleFolderCollapsed (id); });
+            if (t->isBus() && ! t->isFolder)
+                folders.addItem ("Usar este bus como carpeta", [&s, id = trackId] { s.updateTrack (id, [] (Track& x) { x.isFolder = true; }); });
+            juce::PopupMenu into;
+            for (auto& f : s.project().tracks)
+                if (f.isFolder && f.id != trackId && f.id != t->parent && ! s.project().isDescendantOf (f, trackId))
+                    into.addItem (f.name, [&s, id = trackId, fid = f.id] { s.moveIntoFolder (id, fid); });
+            folders.addSubMenu ("Mover a la carpeta", into, into.getNumItems() > 0);
+            if (! t->parent.isNull())
+                folders.addItem ("Sacar de la carpeta", [&s, id = trackId] { s.takeOutOfFolder (id); });
+            m.addSubMenu ("Carpeta", folders);
+        }
         if (t->isBus()) addRoutingMenu (m, ctx.session, *t);
         else addTrackInputMenus (m, ctx.session, *t);
         juce::PopupMenu automation;
@@ -264,7 +325,8 @@ public:
         m.addSeparator();
         addMidiLearnMenu (m, ctx.session, *t);
         m.addSeparator();
-        m.addItem ("Eliminar pista", [this] { ctx.session.removeTrack (trackId); });
+        if (t->isFolder) m.addItem ("Eliminar carpeta (las pistas quedan)", [this] { ctx.session.removeTrack (trackId); });
+        else m.addItem ("Eliminar pista", [this] { ctx.session.removeTrack (trackId); });
         m.showMenuAsync (juce::PopupMenu::Options());
     }
 
@@ -490,7 +552,7 @@ public:
             if (r.lane >= 0) g.setColour (colours::background.brighter (0.02f));
             else g.setColour (r.track % 2 == 0 ? colours::lane : colours::laneAlt);
             g.fillRect (clip.getX(), r.y, clip.getWidth(), r.h);
-            if (r.lane < 0 && proj.tracks[(size_t) r.track].id == s.selectedTrack)
+            if (r.lane < 0 && s.isTrackSelected (proj.tracks[(size_t) r.track].id))
             {
                 g.setColour (juce::Colour (0x06ffffff));
                 g.fillRect (clip.getX(), r.y, clip.getWidth(), r.h);
@@ -542,10 +604,31 @@ public:
             g.fillRect (xFor (m.position), (float) clip.getY(), 1.0f, (float) clip.getHeight());
         }
 
+        // Carpeta cerrada: resumen de los ítems de adentro
+        for (auto& r : arr.rows)
+        {
+            auto& folder = proj.tracks[(size_t) r.track];
+            if (r.lane >= 0 || ! folder.isFolder || ! folder.folderCollapsed || r.y > clip.getBottom() || r.y + r.h < clip.getY()) continue;
+            const auto [first, last] = edit::trackBlock (proj, folder.id);
+            const int inner = juce::jmax (1, last - first);
+            const auto lineH = juce::jlimit (2.0f, 8.0f, (float) (r.h - 16) / (float) inner);
+            for (int k = first + 1; k <= last; ++k)
+            {
+                auto& child = proj.tracks[(size_t) k];
+                const auto y = (float) r.y + 8 + (float) (k - first - 1) * lineH;
+                g.setColour (colours::named (child.colour).withAlpha (0.55f));
+                for (auto& c : child.clips)
+                    g.fillRoundedRectangle (juce::Rectangle<float> (xFor (c.start), y, juce::jmax (2.0f, xFor (proj.audioClipEnd (c)) - xFor (c.start)), lineH - 1), 1.5f);
+                for (auto& c : child.midiClips)
+                    g.fillRoundedRectangle (juce::Rectangle<float> (xFor (c.start), y, juce::jmax (2.0f, xFor (c.end()) - xFor (c.start)), lineH - 1), 1.5f);
+            }
+        }
+
         // Ítems
         for (int i = 0; i < (int) proj.tracks.size(); ++i)
         {
             auto& t = proj.tracks[(size_t) i];
+            if (proj.isInsideCollapsedFolder (t)) continue;
             const auto colour = colours::named (t.colour);
             for (auto& c : t.clips)
             {
@@ -709,7 +792,7 @@ public:
         }
     }
 
-    struct LaneDrag { juce::Uuid trackId, laneId; int point = -1; bool moved = false; };
+    struct LaneDrag { juce::Uuid trackId, laneId; int point = -1; bool moved = false; bool tension = false; double startTension = 0; };
     std::optional<LaneDrag> laneDrag;
 
     int pointNear (const AutomationLane& lane, const juce::Rectangle<float>& area, juce::Point<float> p) const
@@ -739,9 +822,42 @@ public:
         {
             s.updateTrack (trackId, [&] (Track& x) { for (auto& l : x.automation) if (l.id == laneId) fn (l); }, undoable);
         };
+        // Tramo bajo el mouse (para la forma de la curva)
+        int segment = -1;
+        {
+            const auto beat = beatAt (e.position.x);
+            for (int i = 0; i + 1 < (int) lane->points.size(); ++i)
+                if (lane->points[(size_t) i].time <= beat && beat < lane->points[(size_t) i + 1].time) segment = i;
+        }
         if (e.mods.isPopupMenu())
         {
             juce::PopupMenu m;
+            const int shapePoint = near >= 0 ? near : segment;
+            if (shapePoint >= 0 && shapePoint + 1 < (int) lane->points.size())
+            {
+                juce::PopupMenu shapes;
+                const auto current = lane->points[(size_t) shapePoint].shape;
+                for (auto sh : { CurveShape::linear, CurveShape::slowStartEnd, CurveShape::fastStart, CurveShape::fastEnd, CurveShape::bezier, CurveShape::square })
+                    shapes.addItem (displayName (sh), true, current == sh, [withLane, shapePoint, sh]
+                    {
+                        withLane ([shapePoint, sh] (AutomationLane& l)
+                        {
+                            if (shapePoint < (int) l.points.size())
+                            {
+                                auto& pt = l.points[(size_t) shapePoint];
+                                pt.shape = sh;
+                                if (sh == CurveShape::bezier && std::abs (pt.tension) < 0.05) pt.tension = 0.5;
+                            }
+                        }, true);
+                    });
+                shapes.addSeparator();
+                shapes.addItem ("Aplicar a todo el carril", [withLane, current]
+                {
+                    withLane ([current] (AutomationLane& l) { for (auto& pt : l.points) pt.shape = current; }, true);
+                });
+                m.addSubMenu ("Forma del tramo", shapes);
+                m.addSeparator();
+            }
             if (near >= 0)
             {
                 m.addItem ("Eliminar punto", [withLane, near] { withLane ([near] (AutomationLane& l) { if (near < (int) l.points.size()) l.points.erase (l.points.begin() + near); }, true); });
@@ -775,6 +891,14 @@ public:
             withLane ([near] (AutomationLane& l) { if (near < (int) l.points.size()) l.points.erase (l.points.begin() + near); }, true);
             return true;
         }
+        // Ctrl/Cmd + arrastrar un tramo: curvarlo (tensión), como Alt+arrastrar en REAPER
+        if ((e.mods.isCommandDown() || e.mods.isCtrlDown()) && near < 0 && segment >= 0)
+        {
+            s.beginGesture();
+            laneDrag = LaneDrag { trackId, laneId, segment, false, true,
+                                  lane->points[(size_t) segment].shape == CurveShape::bezier ? lane->points[(size_t) segment].tension : 0.0 };
+            return true;
+        }
         s.beginGesture();
         int point = near;
         if (point < 0)
@@ -805,6 +929,25 @@ public:
         const auto area = laneArea (arr.rows[(size_t) rowIndex]);
         const bool fine = e.mods.isShiftDown();   // Shift: solo vertical
         auto& d = *laneDrag;
+        if (d.tension)
+        {
+            // Hacia arriba: el tramo sube rápido al principio; hacia abajo: lento al principio
+            const auto tension = juce::jlimit (-1.0, 1.0, d.startTension - e.getDistanceFromDragStartY() / 80.0);
+            s.updateTrack (d.trackId, [&] (Track& x)
+            {
+                for (auto& l : x.automation)
+                    if (l.id == d.laneId && d.point >= 0 && d.point < (int) l.points.size())
+                    {
+                        auto& p = l.points[(size_t) d.point];
+                        // Si el tramo baja, se invierte para que "arriba" siempre curve hacia arriba
+                        const bool falling = d.point + 1 < (int) l.points.size() && l.points[(size_t) d.point + 1].value < p.value;
+                        p.shape = CurveShape::bezier;
+                        p.tension = falling ? -tension : tension;
+                    }
+            }, false);
+            d.moved = true;
+            return;
+        }
         const auto beat = s.snap (beatAt (e.position.x));
         const auto y = juce::jlimit (area.getY(), area.getBottom(), e.position.y);
         s.updateTrack (d.trackId, [&] (Track& x)
@@ -868,8 +1011,10 @@ public:
         if (auto* row = arr.rowAt (e.position.y); row != nullptr && row->lane >= 0)
         {
             const auto* lane = laneOf (*row);
-            setMouseCursor (lane != nullptr && pointNear (*lane, laneArea (*row), e.position) >= 0 ? juce::MouseCursor::DraggingHandCursor
-                                                                                                    : juce::MouseCursor::CrosshairCursor);
+            const bool onPoint = lane != nullptr && pointNear (*lane, laneArea (*row), e.position) >= 0;
+            setMouseCursor (onPoint ? juce::MouseCursor::DraggingHandCursor
+                                    : e.mods.isCommandDown() || e.mods.isCtrlDown() ? juce::MouseCursor::UpDownResizeCursor
+                                                                                    : juce::MouseCursor::CrosshairCursor);
             return;
         }
         auto hit = hitTest (e.position);
@@ -1453,8 +1598,10 @@ void Arrangement::computeLayout()
     rows.clear();
     int y = 0;
     auto& tracks = ctx.session.project().tracks;
+    auto& proj = ctx.session.project();
     for (int i = 0; i < (int) tracks.size(); ++i)
     {
+        if (proj.isInsideCollapsedFolder (tracks[(size_t) i])) continue;   // carpeta cerrada
         rows.push_back ({ i, -1, y, trackHeight });
         y += trackHeight;
         for (int l = 0; l < (int) tracks[(size_t) i].automation.size(); ++l)

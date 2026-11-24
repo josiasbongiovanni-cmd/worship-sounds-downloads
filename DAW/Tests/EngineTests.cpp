@@ -292,6 +292,44 @@ struct EngineTests : juce::UnitTest
             expectWithinAbsoluteError (out.getSample (0, 1000), Decibels::toGain (-6.0), 1.0e-3f);
         }
 
+        beginTest ("Carpeta: las pistas hijas suenan a través de la carpeta"_u);
+        {
+            Rig rig;
+            auto f = writeImpulseFile (rig.folder, "imp.wav", 1.0, { 1000 });
+            auto& a = edit::addTrack (rig.project, "Coro 1");
+            auto aid = a.id;
+            edit::addClip (rig.project, aid, rig.clip (f, 0.0, 1.0));
+            auto folder = edit::makeFolder (rig.project, { aid }, "Coros");
+            rig.project.findTrack (folder)->volumeDb = -12;
+            rig.apply();
+            rig.render (0, 0.05);
+            auto out = rig.render (0, 1.0);
+            expectWithinAbsoluteError (out.getSample (0, 1000), Decibels::toGain (-12.0), 1.0e-3f);
+            // Silenciar la carpeta silencia a sus hijas
+            rig.project.findTrack (folder)->muted = true;
+            rig.apply();
+            rig.render (0, 0.05);
+            out = rig.render (0, 1.0);
+            expectWithinAbsoluteError (out.getSample (0, 1000), 0.0f, 1.0e-4f);
+        }
+
+        beginTest ("Automatización con curva (escalón)"_u);
+        {
+            Rig rig;
+            auto f = writeImpulseFile (rig.folder, "imp.wav", 2.0, { 36000 });   // beat 1,5
+            auto& a = edit::addTrack (rig.project, "Voz");
+            auto aid = a.id;
+            edit::addClip (rig.project, aid, rig.clip (f, 0.0, 2.0));
+            auto& lane = edit::automation::ensureLane (*rig.project.findTrack (aid), { AutomationTarget::Kind::volume }, -12.0);
+            lane.points[0].shape = CurveShape::square;
+            edit::automation::addPoint (lane, 2.0, 0.0);
+            rig.apply();
+            rig.render (0, 0.05);
+            auto out = rig.render (0, 2.0);
+            // Escalón: hasta el beat 2 se mantiene -12 dB (lineal daría -3 dB en el beat 1,5)
+            expectWithinAbsoluteError (out.getSample (0, 36000), Decibels::toGain (-12.0), 2.0e-3f);
+        }
+
         beginTest ("Envío pre-fader no depende del volumen de la pista"_u);
         {
             Rig rig;

@@ -12,6 +12,22 @@ void removeTrack (Project&, const juce::Uuid&);
 /** Mueve una pista a la posición `newIndex` (arrastrar para reordenar). */
 void moveTrack (Project&, const juce::Uuid&, int newIndex);
 
+// Carpetas
+/** Mueve una pista (y, si es carpeta, todo su contenido) a `newIndex`. */
+void moveTrackBlock (Project&, const juce::Uuid&, int newIndex);
+/** Índices [primero, último] de una pista y todo lo que contiene. */
+std::pair<int, int> trackBlock (const Project&, const juce::Uuid&);
+/** Mete la pista en la carpeta (al final de su contenido). Falla si la carpeta está dentro de la pista. */
+bool setParent (Project&, const juce::Uuid& track, const juce::Uuid& folder);
+/** Saca la pista de su carpeta (queda justo después). */
+void unparent (Project&, const juce::Uuid& track);
+/** Crea una carpeta con estas pistas (en la posición de la primera). Devuelve su id. */
+juce::Uuid makeFolder (Project&, const std::vector<juce::Uuid>& tracks, const juce::String& name);
+/** Deja las carpetas consistentes: las hijas quedan contiguas debajo de su carpeta (si no, salen). */
+void normalizeFolders (Project&);
+/** Después de arrastrar una pista: adopta la carpeta según la pista de arriba (como REAPER). */
+void adoptFolderFromAbove (Project&, const juce::Uuid& track);
+
 // Ruteo: buses y envíos
 /** Crea un envío de `from` al bus (si no crea un bucle). Devuelve el id del envío. */
 std::optional<juce::Uuid> addSend (Project&, const juce::Uuid& from, const juce::Uuid& bus, double levelDb = -12, bool preFader = false);

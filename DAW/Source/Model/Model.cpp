@@ -190,7 +190,7 @@ std::vector<juce::Uuid> Project::destinations (const Track& t) const
         if (id.isNull() || id == t.id) return;
         if (auto* b = findTrack (id); b != nullptr && b->isBus() && std::find (out.begin(), out.end(), id) == out.end()) out.push_back (id);
     };
-    if (t.directOutPair < 2) addIfBus (t.outputBus);
+    if (t.directOutPair < 2) addIfBus (outputOf (t));
     for (auto& s : t.sends) addIfBus (s.target);
     return out;
 }
@@ -218,6 +218,49 @@ bool Project::canRouteTo (const juce::Uuid& from, const juce::Uuid& bus) const
 {
     auto* b = findTrack (bus);
     return b != nullptr && b->isBus() && bus != from && ! feedsInto (bus, from);
+}
+
+juce::Uuid Project::outputOf (const Track& t) const
+{
+    if (t.directOutPair >= 2) return juce::Uuid::null();
+    auto valid = [&] (const juce::Uuid& id) { auto* b = findTrack (id); return id != t.id && b != nullptr && b->isBus(); };
+    if (! t.outputBus.isNull() && valid (t.outputBus)) return t.outputBus;
+    if (! t.parent.isNull() && valid (t.parent)) return t.parent;
+    return juce::Uuid::null();
+}
+
+int Project::folderDepth (const Track& t) const
+{
+    int depth = 0;
+    auto* cur = &t;
+    while (cur != nullptr && ! cur->parent.isNull() && depth < 64)
+    {
+        cur = findTrack (cur->parent);
+        if (cur != nullptr) ++depth;
+    }
+    return depth;
+}
+
+bool Project::isDescendantOf (const Track& t, const juce::Uuid& ancestor) const
+{
+    auto* cur = &t;
+    for (int guard = 0; cur != nullptr && ! cur->parent.isNull() && guard < 64; ++guard)
+    {
+        if (cur->parent == ancestor) return true;
+        cur = findTrack (cur->parent);
+    }
+    return false;
+}
+
+bool Project::isInsideCollapsedFolder (const Track& t) const
+{
+    auto* cur = &t;
+    for (int guard = 0; cur != nullptr && ! cur->parent.isNull() && guard < 64; ++guard)
+    {
+        cur = findTrack (cur->parent);
+        if (cur != nullptr && cur->folderCollapsed) return true;
+    }
+    return false;
 }
 
 std::vector<const Track*> Project::buses() const
@@ -264,6 +307,40 @@ juce::String AutomationTarget::formatValue (double v) const
     }
 }
 
+double AutomationPoint::curve (CurveShape shape, double tension, double x) noexcept
+{
+    x = juce::jlimit (0.0, 1.0, x);
+    switch (shape)
+    {
+        case CurveShape::square:       return 0.0;   // mantiene el valor hasta el punto siguiente
+        case CurveShape::slowStartEnd: return 0.5 - 0.5 * std::cos (x * juce::MathConstants<double>::pi);
+        case CurveShape::fastStart:    return 1.0 - std::pow (1.0 - x, 3.0);
+        case CurveShape::fastEnd:      return x * x * x;
+        case CurveShape::bezier:       return std::pow (x, std::pow (4.0, -juce::jlimit (-1.0, 1.0, tension)));
+        default:                       return x;
+    }
+}
+
+static const char* shapeIds[] = { "linear", "square", "slow", "fastStart", "fastEnd", "bezier" };
+juce::String toString (CurveShape s) { return shapeIds[(int) s]; }
+CurveShape curveShapeFromString (const juce::String& s)
+{
+    for (int i = 0; i < (int) std::size (shapeIds); ++i) if (s == shapeIds[i]) return (CurveShape) i;
+    return CurveShape::linear;
+}
+juce::String displayName (CurveShape s)
+{
+    switch (s)
+    {
+        case CurveShape::square:       return juce::String::fromUTF8 ("Escalón");
+        case CurveShape::slowStartEnd: return "Suave (lenta al inicio y al final)";
+        case CurveShape::fastStart:    return juce::String::fromUTF8 ("Rápida al inicio");
+        case CurveShape::fastEnd:      return juce::String::fromUTF8 ("Rápida al final");
+        case CurveShape::bezier:       return juce::String::fromUTF8 ("Curva con tensión");
+        default:                       return "Lineal";
+    }
+}
+
 double AutomationLane::valueAt (Beats t) const noexcept
 {
     if (points.empty()) return target.defaultValue();
@@ -273,7 +350,7 @@ double AutomationLane::valueAt (Beats t) const noexcept
     const auto& b = *it;
     const auto& a = *(it - 1);
     if (b.time - a.time <= 1e-9) return b.value;
-    return a.value + (b.value - a.value) * (t - a.time) / (b.time - a.time);
+    return a.value + (b.value - a.value) * AutomationPoint::curve (a.shape, a.tension, (t - a.time) / (b.time - a.time));
 }
 
 void AutomationLane::sortPoints()
