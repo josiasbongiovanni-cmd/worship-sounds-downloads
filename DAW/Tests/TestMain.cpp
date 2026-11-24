@@ -8,7 +8,7 @@ int main (int argc, char** argv)
     runner.setAssertOnFailure (false);
     juce::String category = argc > 1 ? juce::String (argv[1]) : juce::String();
     if (category.isNotEmpty()) runner.runTestsInCategory (category);
-    else { runner.runTestsInCategory ("Model"); }
+    else { runner.runTestsInCategory ("Model"); runner.runTestsInCategory ("Engine"); }
 
     int failures = 0;
     for (int i = 0; i < runner.getNumResults(); ++i)

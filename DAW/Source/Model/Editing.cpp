@@ -561,17 +561,17 @@ Project makeProject (Template tmpl, const juce::String& name, double bpm, const 
     switch (tmpl)
     {
         case Template::empty:       specs = { { "Audio 1", "violet", TrackRole::audio } }; break;
-        case Template::fullBand:    specs = { { "Batería", "coral", TrackRole::audio }, { "Bajo", "amber", TrackRole::audio },
-                                              { "Guitarra Eléctrica", "rose", TrackRole::audio }, { "Guitarra Acústica", "lime", TrackRole::audio },
+        case Template::fullBand:    specs = { { "Batería", "coral", TrackRole::audio }, { "Bajo", "amber", TrackRole::audio }, // utf8-ok (se convierte con fromUTF8)
+                                              { "Guitarra Eléctrica", "rose", TrackRole::audio }, { "Guitarra Acústica", "lime", TrackRole::audio }, // utf8-ok (se convierte con fromUTF8)
                                               { "Keys", "sky", TrackRole::instrument }, { "Pad", "indigo", TrackRole::instrument },
-                                              { "Voz Líder", "violet", TrackRole::audio }, { "Coros", "teal", TrackRole::audio } }; break;
-        case Template::acoustic:    specs = { { "Guitarra Acústica", "lime", TrackRole::audio }, { "Piano", "sky", TrackRole::instrument },
-                                              { "Pad", "indigo", TrackRole::instrument }, { "Voz Líder", "violet", TrackRole::audio },
+                                              { "Voz Líder", "violet", TrackRole::audio }, { "Coros", "teal", TrackRole::audio } }; break; // utf8-ok (se convierte con fromUTF8)
+        case Template::acoustic:    specs = { { "Guitarra Acústica", "lime", TrackRole::audio }, { "Piano", "sky", TrackRole::instrument }, // utf8-ok (se convierte con fromUTF8)
+                                              { "Pad", "indigo", TrackRole::instrument }, { "Voz Líder", "violet", TrackRole::audio }, // utf8-ok (se convierte con fromUTF8)
                                               { "Coros", "teal", TrackRole::audio } }; break;
-        case Template::vocals:      specs = { { "Voz Líder", "violet", TrackRole::audio }, { "Coro 1", "teal", TrackRole::audio },
+        case Template::vocals:      specs = { { "Voz Líder", "violet", TrackRole::audio }, { "Coro 1", "teal", TrackRole::audio }, // utf8-ok (se convierte con fromUTF8)
                                               { "Coro 2", "mint", TrackRole::audio }, { "Pad", "indigo", TrackRole::instrument } }; break;
-        case Template::multitracks: specs = { { "Guía", "slate", TrackRole::guide }, { "Batería", "coral", TrackRole::audio },
-                                              { "Percusión", "amber", TrackRole::audio }, { "Bajo", "amber", TrackRole::audio },
+        case Template::multitracks: specs = { { "Guía", "slate", TrackRole::guide }, { "Batería", "coral", TrackRole::audio }, // utf8-ok (se convierte con fromUTF8)
+                                              { "Percusión", "amber", TrackRole::audio }, { "Bajo", "amber", TrackRole::audio }, // utf8-ok (se convierte con fromUTF8)
                                               { "Guitarras", "rose", TrackRole::audio }, { "Keys", "sky", TrackRole::audio },
                                               { "Pad", "indigo", TrackRole::audio }, { "Coros", "teal", TrackRole::audio } }; break;
     }
