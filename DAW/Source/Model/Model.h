@@ -41,12 +41,17 @@ struct Timeline
 };
 
 //==============================================================================
-enum class TrackRole { audio, guide, instrument };
+enum class TrackRole { audio, guide, instrument, bus };
 enum class MonitorMode { off, on, autoTape };
+/** Modos de automatización (como REAPER): apagado = se ignoran los carriles (Trim/Read). */
+enum class AutomationMode { off, read, touch, latch };
 enum class SectionKind { intro, verse, preChorus, chorus, bridge, interlude, tag, vamp, outro };
 
 juce::String toString (TrackRole);
 juce::String toString (MonitorMode);
+juce::String toString (AutomationMode);
+AutomationMode automationModeFromString (const juce::String&);
+juce::String displayName (AutomationMode);
 juce::String toString (SectionKind);
 TrackRole trackRoleFromString (const juce::String&);
 MonitorMode monitorModeFromString (const juce::String&);
@@ -139,6 +144,56 @@ struct ChannelEQ
     bool isFlat() const noexcept { return lowGain == 0 && midGain == 0 && highGain == 0; }
 };
 
+/** Envío a un bus (reverb, delay, mezcla de in-ears…). */
+struct Send
+{
+    juce::Uuid id;
+    juce::Uuid target = juce::Uuid::null();   // pista de bus
+    double levelDb = -12;
+    double pan = 0;
+    bool preFader = false;        // pre-fader: no depende del volumen de la pista (mezclas de monitoreo)
+    bool muted = false;
+};
+
+/** Qué controla un carril de automatización. */
+struct AutomationTarget
+{
+    enum class Kind { volume, pan, sendLevel, pluginParam };
+    Kind kind = Kind::volume;
+    juce::Uuid ref = juce::Uuid::null();   // id del envío o del slot de plugin
+    int param = -1;               // índice del parámetro del plugin
+    juce::String paramName;       // para mostrarlo aunque el plugin no esté cargado
+
+    bool operator== (const AutomationTarget& o) const noexcept { return kind == o.kind && ref == o.ref && param == o.param; }
+    double minValue() const noexcept;
+    double maxValue() const noexcept;
+    double defaultValue() const noexcept;
+    /** Volumen y envíos: escala de fader (más resolución cerca de 0 dB). Resto: lineal. */
+    double toNormalised (double value) const noexcept;
+    double fromNormalised (double norm) const noexcept;
+    juce::String formatValue (double value) const;
+};
+
+struct AutomationPoint
+{
+    Beats time = 0;
+    double value = 0;
+};
+
+struct AutomationLane
+{
+    juce::Uuid id;
+    AutomationTarget target;
+    std::vector<AutomationPoint> points;   // ordenados por tiempo; interpolación lineal
+    bool visible = true;
+    bool active = true;                    // desactivado = se ignora (como "bypass" del envolvente)
+    bool writing = false;                  // transitorio (no se guarda): se está escribiendo en touch/latch
+
+    /** Valor en `t` (antes del primer punto = primer valor; después del último = último valor). */
+    double valueAt (Beats t) const noexcept;
+    void sortPoints();
+};
+
 struct Track
 {
     juce::Uuid id;
@@ -157,8 +212,18 @@ struct Track
     std::vector<MidiClip> midiClips;
     /** 0 = al Master. N = salida directa de hardware N (par estéreo N, base 1), p. ej. click o guía a los in-ears. */
     int directOutPair = 0;
+    /** Bus de destino (vacío = Master). Como la salida de una pista hija hacia su carpeta en REAPER. */
+    juce::Uuid outputBus = juce::Uuid::null();
+    std::vector<Send> sends;
+    std::vector<AutomationLane> automation;
+    AutomationMode automationMode = AutomationMode::read;
 
     bool isInstrument() const noexcept { return role == TrackRole::instrument; }
+    bool isBus() const noexcept { return role == TrackRole::bus; }
+    AutomationLane* findLane (const AutomationTarget&);
+    const AutomationLane* findLane (const AutomationTarget&) const;
+    /** Carril que manda en la reproducción (modo distinto de apagado, activo, con puntos y sin escritura en curso). */
+    const AutomationLane* playingLane (const AutomationTarget&) const;
 };
 
 struct Section
@@ -207,6 +272,14 @@ struct Project
     bool hasSolo() const;
     bool isAudible (const Track&) const;
 
+    /** Buses a los que manda una pista (salida + envíos). */
+    std::vector<juce::Uuid> destinations (const Track&) const;
+    /** ¿La señal de `from` llega (directa o indirectamente) a `to`? */
+    bool feedsInto (const juce::Uuid& from, const juce::Uuid& to) const;
+    /** ¿Se puede mandar `from` a `bus` sin crear un bucle? */
+    bool canRouteTo (const juce::Uuid& from, const juce::Uuid& bus) const;
+    std::vector<const Track*> buses() const;
+
     /** Final del contenido en beats. */
     Beats contentEnd() const;
     Beats audioClipEnd (const AudioClip&) const;
@@ -219,6 +292,9 @@ struct Decibels
 {
     static constexpr double silence = -60.0;
     static float toGain (double db) noexcept { return db <= silence ? 0.0f : (float) std::pow (10.0, db / 20.0); }
+    /** Escala de fader: más resolución cerca de 0 dB (0 dB ≈ 78 % del recorrido, +6 dB arriba). */
+    static double faderPosition (double db) noexcept { return db <= silence ? 0.0 : std::pow (juce::jmin (66.0, db - silence) / 66.0, 2.2); }
+    static double faderDb (double pos) noexcept { return pos <= 0.0005 ? silence : silence + std::pow (juce::jlimit (0.0, 1.0, pos), 1.0 / 2.2) * 66.0; }
 };
 
 } // namespace wdaw

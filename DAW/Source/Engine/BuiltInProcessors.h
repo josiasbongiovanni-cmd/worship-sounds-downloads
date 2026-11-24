@@ -44,6 +44,61 @@ private:
     juce::AudioParameterFloat* release = nullptr;
 };
 
+/** Base de los efectos incluidos: estéreo, parámetros guardados como valores normalizados. */
+class BuiltInEffect : public juce::AudioProcessor
+{
+public:
+    BuiltInEffect();
+    bool hasEditor() const override { return true; }
+    juce::AudioProcessorEditor* createEditor() override { return new juce::GenericAudioProcessorEditor (*this); }
+    bool acceptsMidi() const override { return false; }
+    bool producesMidi() const override { return false; }
+    void releaseResources() override {}
+    using juce::AudioProcessor::processBlock;
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram (int) override {}
+    const juce::String getProgramName (int) override { return {}; }
+    void changeProgramName (int, const juce::String&) override {}
+    void getStateInformation (juce::MemoryBlock&) override;
+    void setStateInformation (const void*, int) override;
+};
+
+/** "Reverb básica": sala/plato para un bus de efectos (100 % húmedo por defecto). */
+class ReverbProcessor : public BuiltInEffect
+{
+public:
+    ReverbProcessor();
+    const juce::String getName() const override;
+    void prepareToPlay (double sampleRate, int blockSize) override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    double getTailLengthSeconds() const override { return 6.0; }
+private:
+    juce::Reverb reverb;
+    juce::AudioParameterFloat *size, *damping, *width, *wet, *dry;
+};
+
+/** "Delay básico": eco estéreo con realimentación y filtro de agudos (tiempo en ms o sincronizado al tempo). */
+class DelayProcessor : public BuiltInEffect
+{
+public:
+    DelayProcessor();
+    const juce::String getName() const override;
+    void prepareToPlay (double sampleRate, int blockSize) override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    double getTailLengthSeconds() const override { return 4.0; }
+    /** Duraciones sincronizadas: 0 = libre (ms), luego 1/4, 1/8 con puntillo, 1/8, 1/16. */
+    static juce::StringArray syncNames();
+private:
+    juce::AudioBuffer<float> line;
+    int writePos = 0;
+    double sr = 48000;
+    float lowState[2] {};
+    juce::LinearSmoothedValue<float> delaySamples;
+    juce::AudioParameterFloat *timeMs, *feedback, *mix, *tone;
+    juce::AudioParameterChoice* sync;
+};
+
 /** Ganancia unitaria que retrasa la señal N muestras y lo reporta (para probar PDC). */
 class LatencyTestProcessor : public juce::AudioProcessor
 {

@@ -112,6 +112,8 @@ PluginSlot PluginManager::internalSlot (const juce::String& internalId)
     s.manufacturer = "Worship DAW";
     if (internalId == "piano")     s.name = juce::String::fromUTF8 ("Piano básico");
     else if (internalId == "pad")  s.name = juce::String::fromUTF8 ("Pad básico");
+    else if (internalId == "reverb") s.name = juce::String::fromUTF8 ("Reverb básica");
+    else if (internalId == "delay")  s.name = juce::String::fromUTF8 ("Delay básico");
     else                           s.name = internalId;
     return s;
 }
@@ -139,6 +141,8 @@ PluginInstance::Ptr PluginManager::createInstanceSync (const PluginSlot& slot, d
             proc = std::make_unique<BasicSynthProcessor> (id == "piano" ? BasicSynthProcessor::Kind::piano : BasicSynthProcessor::Kind::pad);
             instrument = true;
         }
+        else if (id == "reverb") proc = std::make_unique<ReverbProcessor>();
+        else if (id == "delay")  proc = std::make_unique<DelayProcessor>();
         else if (id.startsWith ("latency:"))
             proc = std::make_unique<LatencyTestProcessor> (id.fromFirstOccurrenceOf (":", false, false).getIntValue());
     }

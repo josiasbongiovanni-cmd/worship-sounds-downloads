@@ -155,6 +155,65 @@ struct MidiEditTests : juce::UnitTest
             return c;
         };
 
+        beginTest ("Buses: sin bucles, solo y borrado");
+        {
+            auto p = edit::makeProject (edit::Template::empty, "Ruteo", 70, "A", 4);
+            auto voz = p.tracks[0].id;
+            auto voces = edit::addTrack (p, "Voces", TrackRole::bus).id;
+            auto reverb = edit::addTrack (p, "Reverb", TrackRole::bus).id;
+            auto guitarra = edit::addTrack (p, "Guitarra").id;
+            expect (edit::setOutputBus (p, voz, voces));
+            expect (edit::addSend (p, voces, reverb).has_value());
+            expect (! edit::addSend (p, reverb, voces).has_value());      // crearía un bucle
+            expect (! edit::setOutputBus (p, reverb, voces));
+            expect (edit::addSend (p, guitarra, reverb).has_value());
+            expect (p.feedsInto (voz, reverb));
+            // Solo en la voz: suenan sus buses, no la guitarra
+            p.findTrack (voz)->solo = true;
+            expect (p.isAudible (*p.findTrack (voces)));
+            expect (p.isAudible (*p.findTrack (reverb)));
+            expect (! p.isAudible (*p.findTrack (guitarra)));
+            p.findTrack (voz)->solo = false;
+            // Solo en el bus de voces: la voz que lo alimenta también suena
+            p.findTrack (voces)->solo = true;
+            expect (p.isAudible (*p.findTrack (voz)));
+            expect (! p.isAudible (*p.findTrack (guitarra)));
+            p.findTrack (voces)->solo = false;
+            // Borrar el bus: la voz vuelve al Master y se quitan los envíos
+            edit::removeTrack (p, reverb);
+            expect (p.findTrack (guitarra)->sends.empty());
+            edit::removeTrack (p, voces);
+            expect (p.findTrack (voz)->outputBus.isNull());
+        }
+
+        beginTest ("Automatización: puntos, escritura y simplificación"_u);
+        {
+            AutomationLane l;
+            l.target.kind = AutomationTarget::Kind::volume;
+            expectWithinAbsoluteError (l.valueAt (3), 0.0, 1.0e-9);
+            edit::automation::addPoint (l, 0, -10);
+            edit::automation::addPoint (l, 4, 0);
+            edit::automation::addPoint (l, 4, 2);          // reemplaza el del mismo tiempo
+            expectEquals ((int) l.points.size(), 2);
+            expectWithinAbsoluteError (l.valueAt (2), -4.0, 1.0e-9);
+            expectWithinAbsoluteError (l.valueAt (10), 2.0, 1.0e-9);
+            edit::automation::addPoint (l, 1, 99);          // se limita al rango (+6 dB)
+            expectWithinAbsoluteError (l.points[1].value, 6.0, 1.0e-9);
+            // Escribir de 0,5 a 2 reemplaza lo que había y conserva lo de después
+            edit::automation::writeValue (l, 0.5, 2.0, -3);
+            expectWithinAbsoluteError (l.valueAt (2.0), -3.0, 1.0e-9);
+            expectWithinAbsoluteError (l.valueAt (4.0), 2.0, 1.0e-9);
+            for (auto& p : l.points) expect (p.time <= 0.5 || p.time >= 2.0);
+            // Simplificar quita puntos en línea recta
+            AutomationLane r;
+            for (int i = 0; i <= 10; ++i) r.points.push_back ({ (double) i, (double) i });
+            edit::automation::simplify (r, 0.01);
+            expectEquals ((int) r.points.size(), 2);
+            // Escala de fader
+            AutomationTarget v;
+            expectWithinAbsoluteError (v.fromNormalised (v.toNormalised (-7.5)), -7.5, 1.0e-6);
+        }
+
         beginTest ("Cuantizar a la grilla del proyecto");
         {
             auto c = clip();
@@ -229,6 +288,31 @@ struct SerializationTests : juce::UnitTest
         expectEquals ((int) back->tracks[0].inserts[0].state.getSize(), 3);
         expectEquals ((int) back->tracks[4].midiClips[0].controls.size(), 1);
         expectEquals (back->markers[0].name, "Respiración"_u);
+
+        beginTest ("Ida y vuelta JSON: buses, envíos y automatización"_u);
+        {
+            auto q = edit::makeProject (edit::Template::empty, "Buses", 70, "A", 4);
+            auto busId = edit::addTrack (q, "Reverb", TrackRole::bus).id;
+            auto voz = q.tracks[0].id;
+            auto sendId = edit::addSend (q, voz, busId, -8.0, true);
+            expect (sendId.has_value());
+            auto& t = *q.findTrack (voz);
+            t.automationMode = AutomationMode::latch;
+            auto& lane = edit::automation::ensureLane (t, { AutomationTarget::Kind::sendLevel, *sendId }, -8.0);
+            edit::automation::addPoint (lane, 4.0, -20.0);
+            auto r = io::fromJSON (io::toJSON (q));
+            expect (r.has_value());
+            auto& rt = *r->findTrack (voz);
+            expect (r->findTrack (busId)->isBus());
+            expectEquals ((int) rt.sends.size(), 1);
+            expect (rt.sends[0].preFader && rt.sends[0].target == busId);
+            expectWithinAbsoluteError (rt.sends[0].levelDb, -8.0, 1.0e-9);
+            expect (rt.automationMode == AutomationMode::latch);
+            expectEquals ((int) rt.automation.size(), 1);
+            expect (rt.automation[0].target.kind == AutomationTarget::Kind::sendLevel && rt.automation[0].target.ref == *sendId);
+            expectWithinAbsoluteError (rt.automation[0].valueAt (2.0), -14.0, 1.0e-9);
+            expect (rt.outputBus.isNull());
+        }
 
         beginTest ("Abre proyectos de la versión anterior (segundos → beats)"_u);
         const auto v1 = R"({"version":1,"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","name":"Viejo","bpm":60,"beatsPerBar":4,"key":"D",

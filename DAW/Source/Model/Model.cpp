@@ -36,7 +36,28 @@ juce::String Timeline::timecode (double seconds)
 //==============================================================================
 juce::String toString (TrackRole r)
 {
-    switch (r) { case TrackRole::guide: return "guide"; case TrackRole::instrument: return "instrument"; default: return "audio"; }
+    switch (r) { case TrackRole::guide: return "guide"; case TrackRole::instrument: return "instrument"; case TrackRole::bus: return "bus"; default: return "audio"; }
+}
+
+juce::String toString (AutomationMode m)
+{
+    switch (m) { case AutomationMode::off: return "off"; case AutomationMode::touch: return "touch"; case AutomationMode::latch: return "latch"; default: return "read"; }
+}
+
+AutomationMode automationModeFromString (const juce::String& s)
+{
+    return s == "off" ? AutomationMode::off : s == "touch" ? AutomationMode::touch : s == "latch" ? AutomationMode::latch : AutomationMode::read;
+}
+
+juce::String displayName (AutomationMode m)
+{
+    switch (m)
+    {
+        case AutomationMode::off:   return "Apagada (ignorar carriles)";
+        case AutomationMode::touch: return "Touch (escribe mientras tocas)";
+        case AutomationMode::latch: return "Latch (escribe desde que tocas hasta parar)";
+        default:                    return "Leer";
+    }
 }
 
 juce::String toString (MonitorMode m)
@@ -47,7 +68,7 @@ juce::String toString (MonitorMode m)
 static const char* sectionIds[] = { "intro", "verse", "preChorus", "chorus", "bridge", "interlude", "tag", "vamp", "outro" };
 
 juce::String toString (SectionKind k)                 { return sectionIds[(int) k]; }
-TrackRole trackRoleFromString (const juce::String& s) { return s == "guide" ? TrackRole::guide : s == "instrument" ? TrackRole::instrument : TrackRole::audio; }
+TrackRole trackRoleFromString (const juce::String& s) { return s == "guide" ? TrackRole::guide : s == "instrument" ? TrackRole::instrument : s == "bus" ? TrackRole::bus : TrackRole::audio; }
 MonitorMode monitorModeFromString (const juce::String& s) { return s == "on" ? MonitorMode::on : s == "auto" ? MonitorMode::autoTape : MonitorMode::off; }
 
 SectionKind sectionKindFromString (const juce::String& s)
@@ -154,7 +175,127 @@ bool Project::hasSolo() const
 bool Project::isAudible (const Track& t) const
 {
     if (t.muted) return false;
-    return hasSolo() ? t.solo : true;
+    if (! hasSolo() || t.solo) return true;
+    // Solo con buses: el bus de una pista en solo suena, y las pistas que alimentan a un bus en solo también.
+    for (auto& s : tracks)
+        if (s.solo && (feedsInto (s.id, t.id) || feedsInto (t.id, s.id))) return true;
+    return false;
+}
+
+std::vector<juce::Uuid> Project::destinations (const Track& t) const
+{
+    std::vector<juce::Uuid> out;
+    auto addIfBus = [&] (const juce::Uuid& id)
+    {
+        if (id.isNull() || id == t.id) return;
+        if (auto* b = findTrack (id); b != nullptr && b->isBus() && std::find (out.begin(), out.end(), id) == out.end()) out.push_back (id);
+    };
+    if (t.directOutPair < 2) addIfBus (t.outputBus);
+    for (auto& s : t.sends) addIfBus (s.target);
+    return out;
+}
+
+bool Project::feedsInto (const juce::Uuid& from, const juce::Uuid& to) const
+{
+    std::vector<juce::Uuid> stack { from }, seen;
+    while (! stack.empty())
+    {
+        const auto id = stack.back();
+        stack.pop_back();
+        if (std::find (seen.begin(), seen.end(), id) != seen.end()) continue;
+        seen.push_back (id);
+        if (auto* t = findTrack (id))
+            for (auto& d : destinations (*t))
+            {
+                if (d == to) return true;
+                stack.push_back (d);
+            }
+    }
+    return false;
+}
+
+bool Project::canRouteTo (const juce::Uuid& from, const juce::Uuid& bus) const
+{
+    auto* b = findTrack (bus);
+    return b != nullptr && b->isBus() && bus != from && ! feedsInto (bus, from);
+}
+
+std::vector<const Track*> Project::buses() const
+{
+    std::vector<const Track*> out;
+    for (auto& t : tracks) if (t.isBus()) out.push_back (&t);
+    return out;
+}
+
+//==============================================================================
+double AutomationTarget::minValue() const noexcept
+{
+    switch (kind) { case Kind::volume: case Kind::sendLevel: return Decibels::silence; case Kind::pan: return -1; default: return 0; }
+}
+double AutomationTarget::maxValue() const noexcept
+{
+    switch (kind) { case Kind::volume: case Kind::sendLevel: return 6; default: return 1; }
+}
+double AutomationTarget::defaultValue() const noexcept
+{
+    switch (kind) { case Kind::volume: return 0; case Kind::sendLevel: return -12; case Kind::pan: return 0; default: return 0.5; }
+}
+double AutomationTarget::toNormalised (double v) const noexcept
+{
+    v = juce::jlimit (minValue(), maxValue(), v);
+    if (kind == Kind::volume || kind == Kind::sendLevel) return Decibels::faderPosition (v);
+    return (v - minValue()) / (maxValue() - minValue());
+}
+double AutomationTarget::fromNormalised (double n) const noexcept
+{
+    n = juce::jlimit (0.0, 1.0, n);
+    if (kind == Kind::volume || kind == Kind::sendLevel) return Decibels::faderDb (n);
+    return minValue() + n * (maxValue() - minValue());
+}
+juce::String AutomationTarget::formatValue (double v) const
+{
+    switch (kind)
+    {
+        case Kind::volume: case Kind::sendLevel:
+            return v <= Decibels::silence ? "-∞ dB"_u : (v > 0 ? "+" : "") + juce::String (v, 1) + " dB";
+        case Kind::pan:
+            return std::abs (v) < 0.01 ? juce::String ("Centro") : juce::String ((int) std::round (std::abs (v) * 100)) + (v < 0 ? "% L" : "% R");
+        default: return juce::String ((int) std::round (v * 100)) + " %";
+    }
+}
+
+double AutomationLane::valueAt (Beats t) const noexcept
+{
+    if (points.empty()) return target.defaultValue();
+    if (t <= points.front().time) return points.front().value;
+    if (t >= points.back().time) return points.back().value;
+    auto it = std::upper_bound (points.begin(), points.end(), t, [] (Beats x, const AutomationPoint& p) { return x < p.time; });
+    const auto& b = *it;
+    const auto& a = *(it - 1);
+    if (b.time - a.time <= 1e-9) return b.value;
+    return a.value + (b.value - a.value) * (t - a.time) / (b.time - a.time);
+}
+
+void AutomationLane::sortPoints()
+{
+    std::stable_sort (points.begin(), points.end(), [] (auto& a, auto& b) { return a.time < b.time; });
+}
+
+AutomationLane* Track::findLane (const AutomationTarget& t)
+{
+    for (auto& l : automation) if (l.target == t) return &l;
+    return nullptr;
+}
+const AutomationLane* Track::findLane (const AutomationTarget& t) const
+{
+    for (auto& l : automation) if (l.target == t) return &l;
+    return nullptr;
+}
+const AutomationLane* Track::playingLane (const AutomationTarget& t) const
+{
+    if (automationMode == AutomationMode::off) return nullptr;
+    auto* l = findLane (t);
+    return l != nullptr && l->active && ! l->writing && ! l->points.empty() ? l : nullptr;
 }
 
 Beats Project::audioClipEnd (const AudioClip& c) const

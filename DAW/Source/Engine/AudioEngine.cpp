@@ -24,6 +24,18 @@ void DelayLine::process (float* const* ch, int numChannels, int n, int delay) no
     }
 }
 
+float Envelope::at (juce::int64 pos) const noexcept
+{
+    if (points.empty()) return 0;
+    if (pos <= points.front().first) return points.front().second;
+    if (pos >= points.back().first) return points.back().second;
+    auto it = std::upper_bound (points.begin(), points.end(), pos, [] (juce::int64 p, const auto& e) { return p < e.first; });
+    const auto& b = *it;
+    const auto& a = *(it - 1);
+    if (b.first <= a.first) return b.second;
+    return a.second + (b.second - a.second) * (float) (pos - a.first) / (float) (b.first - a.first);
+}
+
 void TrackDSP::prepare (double sr, int maxBlock)
 {
     buffer.setSize (2, maxBlock, false, true, true);
@@ -32,8 +44,10 @@ void TrackDSP::prepare (double sr, int maxBlock)
     midi.ensureSize (4096);
     juce::dsp::ProcessSpec spec { sr, (juce::uint32) maxBlock, 1 };
     for (auto& f : eq) { f.prepare (spec); f.reset(); }
-    gainL.reset (sr, 0.02);
-    gainR.reset (sr, 0.02);
+    busInput.setSize (2, maxBlock, false, true, true);
+    sendScratch.setSize (2, maxBlock, false, true, true);
+    curL = curR = -1;
+    for (auto& [id, line] : connections) { line->buffer.clear(); line->curL = line->curR = -1; }
     for (auto& v : voices) { v.nextOut = -1; v.interp[0].reset(); v.interp[1].reset(); }
 }
 
@@ -248,6 +262,7 @@ void AudioEngine::loadMissingPlugins()
                     return;
                 }
                 inst->slotId = id;
+                inst->processor->setPlayHead (&hostPlayHead);
                 plugins[id] = inst;
                 rebuildSnapshot();
                 if (onPluginsLoaded) onPluginsLoaded();
@@ -306,6 +321,14 @@ void AudioEngine::rebuildSnapshot()
     for (auto& m : project.masterInserts)
         if (auto p = findPlugin (m.id)) { s->master.push_back (p); s->masterBypassed.push_back (m.bypassed); }
 
+    auto envelope = [&] (const AutomationLane* lane)
+    {
+        Envelope e;
+        if (lane != nullptr)
+            for (auto& pt : lane->points) e.points.push_back ({ toSamples (pt.time), (float) pt.value });
+        return e;
+    };
+
     std::vector<int> latencies;
     for (auto& t : project.tracks)
     {
@@ -314,16 +337,16 @@ void AudioEngine::rebuildSnapshot()
         auto& dsp = trackDSP[t.id];
         if (dsp == nullptr) { dsp = TrackDSP::Ptr (new TrackDSP()); dsp->prepare (sr, maxBlock); }
         pt.dsp = dsp;
-
-        const bool audible = project.isAudible (t);
-        const auto gain = audible ? Decibels::toGain (t.volumeDb) : 0.0f;
-        // Ley de paneo de -3 dB
-        const auto angle = (float) (juce::jlimit (-1.0, 1.0, t.pan) + 1.0) * juce::MathConstants<float>::pi * 0.25f;
-        pt.gainL = gain * std::cos (angle) * juce::MathConstants<float>::sqrt2;
-        pt.gainR = gain * std::sin (angle) * juce::MathConstants<float>::sqrt2;
+        pt.isBus = t.isBus();
+        pt.audible = project.isAudible (t);
+        pt.volumeDb = (float) t.volumeDb;
+        pt.pan = (float) t.pan;
+        pt.volumeEnv = envelope (t.playingLane ({ AutomationTarget::Kind::volume }));
+        pt.panEnv = envelope (t.playingLane ({ AutomationTarget::Kind::pan }));
 
         for (auto& c : t.clips)
         {
+            if (t.isBus()) break;
             auto file = fileCache.get (c.file);
             if (file == nullptr) continue;
             PlaySnapshot::Clip pc;
@@ -383,6 +406,16 @@ void AudioEngine::rebuildSnapshot()
             }
         latencies.push_back (latency);
 
+        // Automatización de parámetros de plugins
+        for (auto& lane : t.automation)
+        {
+            if (lane.target.kind != AutomationTarget::Kind::pluginParam) continue;
+            auto* playing = t.playingLane (lane.target);
+            auto plugin = playing != nullptr ? findPlugin (lane.target.ref) : PluginInstance::Ptr();
+            if (plugin == nullptr || lane.target.param < 0 || lane.target.param >= plugin->processor->getParameters().size()) continue;
+            pt.params.push_back ({ plugin, lane.target.param, envelope (playing) });
+        }
+
         pt.eqOn = t.eq.enabled && ! t.eq.isFlat();
         if (pt.eqOn)
         {
@@ -391,7 +424,7 @@ void AudioEngine::rebuildSnapshot()
             pt.eq[1] = C::makePeakFilter (sr, 1000.0f, 0.7f, juce::Decibels::decibelsToGain (t.eq.midGain));
             pt.eq[2] = C::makeHighShelf (sr, 8000.0f, 0.707f, juce::Decibels::decibelsToGain (t.eq.highGain));
         }
-        pt.armed = t.armed;
+        pt.armed = t.armed && ! t.isBus();
         pt.isInstrument = t.isInstrument();
         pt.input = t.input;
         pt.monitor = t.monitor;
@@ -399,19 +432,100 @@ void AudioEngine::rebuildSnapshot()
         s->tracks.push_back (std::move (pt));
     }
 
-    // Compensación de latencia: todas las pistas se alinean con la más lenta.
-    s->maxLatency = latencies.empty() ? 0 : *std::max_element (latencies.begin(), latencies.end());
-    for (size_t i = 0; i < s->tracks.size(); ++i)
+    // Ruteo: salida y envíos de cada pista (los destinos que no son buses válidos van al Master / se ignoran).
+    const int numTracks = (int) project.tracks.size();
+    std::vector<std::vector<int>> edges ((size_t) numTracks);
+    for (int i = 0; i < numTracks; ++i)
     {
-        auto& t = s->tracks[i];
-        t.pdcDelay = s->maxLatency - latencies[i];
-        auto& dsp = *t.dsp;
-        if (t.pdcDelay > 0 && (dsp.pdc == nullptr || dsp.pdc->capacity() < t.pdcDelay + 1))
+        const auto& t = project.tracks[(size_t) i];
+        auto& pt = s->tracks[(size_t) i];
+        pt.output.target = PlaySnapshot::Track::Connection::master;
+        if (t.directOutPair >= 2) pt.output.target = PlaySnapshot::Track::Connection::direct;
+        else if (! t.outputBus.isNull())
+            if (auto bi = project.trackIndex (t.outputBus); bi >= 0 && bi != i && project.tracks[(size_t) bi].isBus())
+                pt.output.target = bi;
+        if (pt.output.target >= 0) edges[(size_t) i].push_back (pt.output.target);
+        for (auto& snd : t.sends)
         {
-            if (dsp.pdc != nullptr) retired.emplace_back (dsp.pdc.get());
-            dsp.pdc = DelayLine::Ptr (new DelayLine (juce::nextPowerOfTwo (t.pdcDelay + 1)));
+            const auto bi = project.trackIndex (snd.target);
+            if (bi < 0 || bi == i || ! project.tracks[(size_t) bi].isBus()) continue;
+            PlaySnapshot::Track::Connection c;
+            c.target = bi;
+            c.key = snd.id;
+            c.levelDb = (float) snd.levelDb;
+            c.pan = (float) snd.pan;
+            c.preFader = snd.preFader;
+            c.muted = snd.muted;
+            c.levelEnv = envelope (t.playingLane ({ AutomationTarget::Kind::sendLevel, snd.id }));
+            pt.sends.push_back (std::move (c));
+            edges[(size_t) i].push_back (bi);
         }
     }
+
+    // Orden topológico (Kahn): una pista se procesa después de todo lo que la alimenta.
+    {
+        std::vector<int> indegree ((size_t) numTracks, 0);
+        for (auto& e : edges) for (auto d : e) ++indegree[(size_t) d];
+        std::vector<int> ready;
+        for (int i = numTracks - 1; i >= 0; --i) if (indegree[(size_t) i] == 0) ready.push_back (i);
+        std::vector<bool> done ((size_t) numTracks, false);
+        while (! ready.empty())
+        {
+            const auto i = ready.back();
+            ready.pop_back();
+            s->order.push_back (i);
+            done[(size_t) i] = true;
+            for (auto d : edges[(size_t) i]) if (--indegree[(size_t) d] == 0) ready.push_back (d);
+        }
+        for (int i = 0; i < numTracks; ++i) if (! done[(size_t) i]) s->order.push_back (i);   // bucle (archivo dañado): no se cuelga
+    }
+
+    // Compensación de latencia por conexión: cada destino espera a su entrada más lenta.
+    std::vector<int> arrival ((size_t) numTracks, 0), inputTime ((size_t) numTracks, 0);
+    for (auto i : s->order)
+    {
+        arrival[(size_t) i] = inputTime[(size_t) i] + latencies[(size_t) i];
+        for (auto d : edges[(size_t) i]) inputTime[(size_t) d] = juce::jmax (inputTime[(size_t) d], arrival[(size_t) i]);
+    }
+    s->maxLatency = 0;
+    for (int i = 0; i < numTracks; ++i)
+        if (s->tracks[(size_t) i].output.target < 0) s->maxLatency = juce::jmax (s->maxLatency, arrival[(size_t) i]);
+
+    auto line = [&] (TrackDSP& dsp, const juce::Uuid& key, int delay)
+    {
+        auto& l = dsp.connections[key];
+        if (l == nullptr || l->capacity() < delay + 1)
+        {
+            if (l != nullptr) retired.emplace_back (l.get());
+            l = DelayLine::Ptr (new DelayLine (juce::nextPowerOfTwo (juce::jmax (64, delay + 1))));
+        }
+        return l;
+    };
+    for (int i = 0; i < numTracks; ++i)
+    {
+        const auto& t = project.tracks[(size_t) i];
+        auto& pt = s->tracks[(size_t) i];
+        auto& dsp = *pt.dsp;
+        const auto destTime = [&] (int target) { return target >= 0 ? inputTime[(size_t) target] : s->maxLatency; };
+        pt.output.delay = juce::jmax (0, destTime (pt.output.target) - arrival[(size_t) i]);
+        pt.output.line = line (dsp, t.id, pt.output.delay);
+        for (auto& c : pt.sends)
+        {
+            c.delay = juce::jmax (0, destTime (c.target) - arrival[(size_t) i]);
+            c.line = line (dsp, c.key, c.delay);
+        }
+        pt.stemDelay = juce::jmax (0, s->maxLatency - arrival[(size_t) i]);
+        pt.stemLine = line (dsp, juce::Uuid ("00000000-0000-0000-0000-00000000057e"), pt.stemDelay);
+        // Conexiones que ya no existen
+        for (auto it = dsp.connections.begin(); it != dsp.connections.end();)
+        {
+            const bool used = it->second == pt.output.line || it->second == pt.stemLine
+                           || std::any_of (pt.sends.begin(), pt.sends.end(), [&] (auto& c) { return c.line == it->second; });
+            if (! used) { retired.emplace_back (it->second.get()); it = dsp.connections.erase (it); }
+            else ++it;
+        }
+    }
+    s->bpm = project.bpm;
 
     for (auto& id : liveTargetIds)
         if (auto i = project.trackIndex (id); i >= 0) s->liveTargets.push_back (i);
@@ -888,12 +1002,91 @@ void AudioEngine::renderClick (PlaySnapshot& s, float* L, float* R, int len, juc
     }
 }
 
+void AudioEngine::updatePlayHead (const PlaySnapshot& s, juce::int64 pos, bool isPlaying) noexcept
+{
+    juce::AudioPlayHead::PositionInfo info;
+    info.setBpm (s.bpm);
+    info.setTimeSignature (juce::AudioPlayHead::TimeSignature { s.beatsPerBar, 4 });
+    info.setTimeInSamples (pos);
+    info.setTimeInSeconds ((double) pos / s.sampleRate);
+    const auto ppq = (double) pos / s.samplesPerBeat;
+    info.setPpqPosition (ppq);
+    info.setPpqPositionOfLastBarStart (std::floor (ppq / s.beatsPerBar) * s.beatsPerBar);
+    info.setBarCount ((juce::int64) std::floor (ppq / s.beatsPerBar));
+    info.setIsPlaying (isPlaying);
+    info.setIsRecording (recording.load());
+    info.setIsLooping (s.loopOn);
+    if (s.loopOn) info.setLoopPoints (juce::AudioPlayHead::LoopPoints { (double) s.loopStart / s.samplesPerBeat, (double) s.loopEnd / s.samplesPerBeat });
+    hostPlayHead.info = info;
+}
+
+void AudioEngine::routeConnection (PlaySnapshot& s, PlaySnapshot::Track& from, PlaySnapshot::Track::Connection& c,
+                                   const float* const* src, float gainL, float gainR, float* const* out, int numOuts,
+                                   int offset, int len) noexcept
+{
+    float* destL = nullptr;
+    float* destR = nullptr;
+    if (c.target >= 0 && c.target < (int) s.tracks.size())
+    {
+        auto& bus = s.tracks[(size_t) c.target].dsp->busInput;
+        destL = bus.getWritePointer (0);
+        destR = bus.getWritePointer (1);
+    }
+    else if (c.target == PlaySnapshot::Track::Connection::direct)
+    {
+        const int outL = (from.directOutPair - 1) * 2, outR = outL + 1;
+        if (from.directOutPair >= 2 && outR < numOuts && out[outL] != nullptr && out[outR] != nullptr)
+        {
+            destL = out[outL] + offset;
+            destR = out[outR] + offset;
+        }
+    }
+    if (destL == nullptr) { destL = masterBus.getWritePointer (0); destR = masterBus.getWritePointer (1); }
+
+    auto* line = c.line.get();
+    float startL = gainL, startR = gainR;
+    if (line != nullptr)
+    {
+        if (line->curL >= 0) { startL = line->curL; startR = line->curR; }
+        line->curL = gainL;
+        line->curR = gainR;
+    }
+    const bool silent = startL == 0 && startR == 0 && gainL == 0 && gainR == 0;
+    if (c.delay <= 0 || line == nullptr)
+    {
+        if (silent) return;
+        auto addRamp = [len] (float* d, const float* x, float g0, float g1)
+        {
+            if (g0 == g1) { if (g1 == 1.0f) juce::FloatVectorOperations::add (d, x, len); else juce::FloatVectorOperations::addWithMultiply (d, x, g1, len); return; }
+            const float step = (g1 - g0) / (float) len;
+            for (int i = 0; i < len; ++i) d[i] += x[i] * (g0 + step * (float) i);
+        };
+        addRamp (destL, src[0], startL, gainL);
+        addRamp (destR, src[1], startR, gainR);
+        return;
+    }
+    // Con retardo de alineación: la línea debe seguir avanzando aunque la ganancia sea 0 (se vacía sola).
+    auto& sc = from.dsp->sendScratch;
+    sc.copyFrom (0, 0, src[0], len);
+    sc.copyFrom (1, 0, src[1], len);
+    float* sp[2] = { sc.getWritePointer (0), sc.getWritePointer (1) };
+    line->process (sp, 2, len, c.delay);
+    if (silent) return;
+    juce::AudioBuffer<float> view (sp, 2, len);
+    view.applyGainRamp (0, 0, len, startL, gainL);
+    view.applyGainRamp (1, 0, len, startR, gainR);
+    juce::FloatVectorOperations::add (destL, sp[0], len);
+    juce::FloatVectorOperations::add (destR, sp[1], len);
+}
+
 void AudioEngine::renderSegment (PlaySnapshot& s, const float* const* in, int numIns, float* const* out, int numOuts,
                                  int offset, int len, juce::int64 pos, bool isPlaying, RecordSession* rec,
                                  std::vector<juce::AudioBuffer<float>>* stems)
 {
     masterBus.clear (0, len);
     const bool recordingNow = rec != nullptr;
+    updatePlayHead (s, pos, isPlaying);
+    for (auto& t : s.tracks) if (t.isBus) t.dsp->busInput.clear (0, len);
 
     // Vista previa de notas (piano roll) por pista
     struct PendingPreview { int track; juce::MidiMessage msg; };
@@ -908,12 +1101,32 @@ void AudioEngine::renderSegment (PlaySnapshot& s, const float* const* in, int nu
         previewFifo.finishedRead (n1 + n2);
     }
 
-    for (size_t ti = 0; ti < s.tracks.size(); ++ti)
+    for (const auto orderIndex : s.order)
     {
+        const auto ti = (size_t) orderIndex;
         auto& t = s.tracks[ti];
         auto& dsp = *t.dsp;
         dsp.buffer.clear (0, len);
         float* ch[2] = { dsp.buffer.getWritePointer (0), dsp.buffer.getWritePointer (1) };
+
+        // 0) Bus: lo que le mandaron las pistas (salidas y envíos) en este bloque
+        if (t.isBus)
+        {
+            dsp.buffer.copyFrom (0, 0, dsp.busInput, 0, 0, len);
+            dsp.buffer.copyFrom (1, 0, dsp.busInput, 1, 0, len);
+        }
+
+        // Automatización de parámetros de plugins (valor al inicio del bloque; también detenido, en el cursor)
+        for (auto& pa : t.params)
+        {
+            auto& params = pa.plugin->processor->getParameters();
+            if (pa.index < params.size())
+            {
+                const auto v = juce::jlimit (0.0f, 1.0f, pa.env.at (pos));
+                auto* param = params.getUnchecked (pa.index);
+                if (std::abs (param->getValue() - v) > 1.0e-5f) param->setValue (v);
+            }
+        }
 
         // 1) Ítems de audio (los superpuestos se suman, como en REAPER)
         if (isPlaying)
@@ -1000,37 +1213,64 @@ void AudioEngine::renderSegment (PlaySnapshot& s, const float* const* in, int nu
                 }
         }
 
-        // 6) Compensación de latencia de plugins
-        if (t.pdcDelay > 0 && dsp.pdc != nullptr) dsp.pdc->process (ch, 2, len, t.pdcDelay);
+        // 6) Envíos pre-fader (mezclas de monitoreo): antes del volumen y el paneo de la pista
+        auto sendGains = [&] (const PlaySnapshot::Track::Connection& c, float& gl, float& gr)
+        {
+            const float db = c.levelEnv.empty() ? c.levelDb : c.levelEnv.at (pos + len);
+            const float g = (c.muted || ! t.audible) ? 0.0f : Decibels::toGain (db);
+            gl = g * juce::jmin (1.0f, 1.0f - c.pan);
+            gr = g * juce::jmin (1.0f, 1.0f + c.pan);
+        };
+        for (auto& c : t.sends)
+            if (c.preFader)
+            {
+                float gl, gr;
+                sendGains (c, gl, gr);
+                routeConnection (s, t, c, ch, gl, gr, out, numOuts, offset, len);
+            }
 
-        // 7) Volumen y paneo (suavizados para que no haya saltos)
-        dsp.gainL.setTargetValue (t.gainL);
-        dsp.gainR.setTargetValue (t.gainR);
-        dsp.gainL.applyGain (ch[0], len);
-        dsp.gainR.applyGain (ch[1], len);
+        // 7) Volumen y paneo (automatizables), en rampa lineal durante el bloque para que no haya saltos
+        {
+            const float db = t.volumeEnv.empty() ? t.volumeDb : t.volumeEnv.at (pos + len);
+            const float pan = juce::jlimit (-1.0f, 1.0f, t.panEnv.empty() ? t.pan : t.panEnv.at (pos + len));
+            const float gain = t.audible ? Decibels::toGain (db) : 0.0f;
+            // Ley de paneo de -3 dB
+            const auto angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+            const float gl = gain * std::cos (angle) * juce::MathConstants<float>::sqrt2;
+            const float gr = gain * std::sin (angle) * juce::MathConstants<float>::sqrt2;
+            if (dsp.curL < 0) { dsp.curL = gl; dsp.curR = gr; }
+            view.applyGainRamp (0, 0, len, dsp.curL, gl);
+            view.applyGainRamp (1, 0, len, dsp.curR, gr);
+            dsp.curL = gl;
+            dsp.curR = gr;
+        }
 
         const auto pk = juce::jmax (view.getMagnitude (0, 0, len), view.getMagnitude (1, 0, len));
         if (pk > dsp.peak.load()) dsp.peak = pk;
 
-        if (stems != nullptr && ti < stems->size())
+        // 8) Envíos post-fader
+        for (auto& c : t.sends)
+            if (! c.preFader)
+            {
+                float gl, gr;
+                sendGains (c, gl, gr);
+                routeConnection (s, t, c, ch, gl, gr, out, numOuts, offset, len);
+            }
+
+        // Stem (exportar por pistas): alineado con el Master
+        if (stems != nullptr && ti < stems->size() && t.stemLine != nullptr)
         {
-            (*stems)[ti].addFrom (0, offset, view, 0, 0, len);
-            (*stems)[ti].addFrom (1, offset, view, 1, 0, len);
+            auto& sc = dsp.sendScratch;
+            sc.copyFrom (0, 0, view, 0, 0, len);
+            sc.copyFrom (1, 0, view, 1, 0, len);
+            float* sp[2] = { sc.getWritePointer (0), sc.getWritePointer (1) };
+            t.stemLine->process (sp, 2, len, t.stemDelay);
+            (*stems)[ti].addFrom (0, offset, sc, 0, 0, len);
+            (*stems)[ti].addFrom (1, offset, sc, 1, 0, len);
         }
 
-        // 8) Salida: al Master o directo a una salida de la interfaz (in-ears)
-        const int pair = t.directOutPair;
-        const int outL = (pair - 1) * 2, outR = outL + 1;
-        if (pair >= 2 && outR < numOuts && out[outL] != nullptr && out[outR] != nullptr)
-        {
-            juce::FloatVectorOperations::add (out[outL] + offset, ch[0], len);
-            juce::FloatVectorOperations::add (out[outR] + offset, ch[1], len);
-        }
-        else
-        {
-            masterBus.addFrom (0, 0, ch[0], len);
-            masterBus.addFrom (1, 0, ch[1], len);
-        }
+        // Salida: al Master, a un bus o directo a una salida de la interfaz (in-ears)
+        routeConnection (s, t, t.output, ch, 1.0f, 1.0f, out, numOuts, offset, len);
 
         // 9) Grabación (señal de entrada sin efectos), desde el punto de inicio exacto
         if (rec != nullptr && isPlaying)

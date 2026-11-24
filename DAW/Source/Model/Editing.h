@@ -12,6 +12,28 @@ void removeTrack (Project&, const juce::Uuid&);
 /** Mueve una pista a la posición `newIndex` (arrastrar para reordenar). */
 void moveTrack (Project&, const juce::Uuid&, int newIndex);
 
+// Ruteo: buses y envíos
+/** Crea un envío de `from` al bus (si no crea un bucle). Devuelve el id del envío. */
+std::optional<juce::Uuid> addSend (Project&, const juce::Uuid& from, const juce::Uuid& bus, double levelDb = -12, bool preFader = false);
+void removeSend (Project&, const juce::Uuid& trackId, const juce::Uuid& sendId);
+/** Salida de la pista: bus (o nulo = Master). Falla si crearía un bucle. */
+bool setOutputBus (Project&, const juce::Uuid& trackId, const juce::Uuid& bus);
+
+// Automatización
+namespace automation
+{
+    /** Busca el carril o lo crea con un punto inicial en `initialValue`. */
+    AutomationLane& ensureLane (Track&, const AutomationTarget&, double initialValue);
+    /** Agrega (o reemplaza si ya hay uno casi en el mismo tiempo) un punto. Devuelve su índice. */
+    int addPoint (AutomationLane&, Beats time, double value);
+    void removePoints (AutomationLane&, Beats from, Beats to);   // [from, to]
+    /** Escritura (touch/latch): reemplaza lo que había entre `from` y `to` por un punto en `to`. */
+    void writeValue (AutomationLane&, Beats from, Beats to, double value);
+    /** Quita puntos redundantes (colineales) dentro de una tolerancia, para que lo escrito quede liviano. */
+    void simplify (AutomationLane&, double tolerance);
+    juce::String laneName (const Project&, const Track&, const AutomationLane&);
+}
+
 // Ítems de audio
 struct ClipRef { int track = -1; int clip = -1; bool isMidi = false; explicit operator bool() const { return track >= 0; } };
 ClipRef findClip (const Project&, const juce::Uuid&);

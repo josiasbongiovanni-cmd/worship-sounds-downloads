@@ -72,8 +72,8 @@ struct Context
 };
 
 /** Escala de fader: más resolución cerca de 0 dB (0 dB ≈ 78 % del recorrido). */
-inline double faderPosition (double db) { return db <= Decibels::silence ? 0.0 : std::pow ((db - Decibels::silence) / 66.0, 2.2); }
-inline double faderDb (double pos)       { return pos <= 0.0005 ? Decibels::silence : Decibels::silence + std::pow (juce::jlimit (0.0, 1.0, pos), 1.0 / 2.2) * 66.0; }
+inline double faderPosition (double db) { return Decibels::faderPosition (db); }
+inline double faderDb (double pos)       { return Decibels::faderDb (pos); }
 inline juce::String formatDb (double db) { return db <= Decibels::silence ? juce::String::fromUTF8 ("-∞") : (db > 0 ? "+" : "") + juce::String (db, 1); }
 inline juce::String formatPan (double p) { return std::abs (p) < 0.01 ? juce::String ("C") : (p < 0 ? "L" : "R") + juce::String ((int) std::round (std::abs (p) * 100)); }
 

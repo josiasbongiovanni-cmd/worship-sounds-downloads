@@ -21,6 +21,15 @@ struct DelayLine : juce::ReferenceCountedObject
     int capacity() const noexcept { return buffer.getNumSamples(); }
     juce::AudioBuffer<float> buffer;
     int writePos = 0;
+    float curL = -1, curR = -1;   // ganancia aplicada en el bloque anterior (rampas sin saltos); -1 = sin valor
+};
+
+/** Envolvente de automatización ya convertida a muestras (interpolación lineal). */
+struct Envelope
+{
+    std::vector<std::pair<juce::int64, float>> points;
+    bool empty() const noexcept { return points.empty(); }
+    float at (juce::int64 pos) const noexcept;
 };
 
 /** Estado de DSP de una pista que persiste entre cambios del proyecto (filtros, suavizados, voces). */
@@ -29,14 +38,14 @@ struct TrackDSP : juce::ReferenceCountedObject
     using Ptr = juce::ReferenceCountedObjectPtr<TrackDSP>;
     void prepare (double sampleRate, int maxBlock);
 
-    juce::AudioBuffer<float> buffer, instrumentBuffer, scratch;
+    juce::AudioBuffer<float> buffer, instrumentBuffer, scratch, busInput, sendScratch;
     juce::MidiBuffer midi, emptyMidi;
     std::array<juce::dsp::IIR::Filter<float>, 6> eq;     // 3 bandas × 2 canales
     std::array<juce::dsp::IIR::Coefficients<float>*, 3> eqCurrent {};
-    juce::LinearSmoothedValue<float> gainL { 1.0f }, gainR { 1.0f };
+    float curL = -1, curR = -1;   // ganancia del bloque anterior (rampa lineal por bloque)
+    std::map<juce::Uuid, DelayLine::Ptr> connections;   // retardo y rampa por conexión (salida, envíos, stem); solo hilo de mensajes
     std::atomic<float> peak { 0.0f };
     bool notesOffPending = false;
-    DelayLine::Ptr pdc;
 
     struct Voice
     {
@@ -73,7 +82,30 @@ struct PlaySnapshot : juce::ReferenceCountedObject
     {
         juce::Uuid id;
         TrackDSP::Ptr dsp;
-        float gainL = 1, gainR = 1;
+        float volumeDb = 0, pan = 0;
+        bool audible = true, isBus = false;
+        Envelope volumeEnv, panEnv;
+
+        /** Salida o envío: destino, retardo de alineación (PDC) y ganancia. */
+        struct Connection
+        {
+            enum : int { master = -1, direct = -2 };
+            juce::Uuid key;
+            int target = master;          // índice de pista (bus), Master o salida directa
+            DelayLine::Ptr line;          // estado persistente (retardo + rampa)
+            int delay = 0;
+            float levelDb = 0, pan = 0;
+            Envelope levelEnv;
+            bool preFader = false, muted = false;
+        };
+        Connection output;
+        std::vector<Connection> sends;
+        DelayLine::Ptr stemLine;          // alinea el stem exportado con el Master
+        int stemDelay = 0;
+
+        struct ParamAutomation { PluginInstance::Ptr plugin; int index = 0; Envelope env; };
+        std::vector<ParamAutomation> params;
+
         std::vector<Clip> clips;
         std::vector<MidiEvent> midi;
         PluginInstance::Ptr instrument;
@@ -81,7 +113,6 @@ struct PlaySnapshot : juce::ReferenceCountedObject
         std::vector<bool> bypassed;
         std::array<juce::dsp::IIR::Coefficients<float>::Ptr, 3> eq;
         bool eqOn = false;
-        int pdcDelay = 0;
         bool armed = false, isInstrument = false;
         TrackInput input;
         MonitorMode monitor = MonitorMode::off;
@@ -91,6 +122,8 @@ struct PlaySnapshot : juce::ReferenceCountedObject
     double sampleRate = 48000, samplesPerBeat = 24000;
     int beatsPerBar = 4;
     std::vector<Track> tracks;
+    std::vector<int> order;          // orden de proceso: las fuentes antes que los buses que las reciben
+    double bpm = 120;
     std::vector<PluginInstance::Ptr> master;
     std::vector<bool> masterBypassed;
     float masterGain = 1;
@@ -301,6 +334,16 @@ private:
                         std::vector<juce::AudioBuffer<float>>* stems);
     void renderClip (const PlaySnapshot::Clip&, TrackDSP&, juce::int64 segStart, int len) noexcept;
     void renderClick (PlaySnapshot& s, float* L, float* R, int len, juce::int64 timelinePos) noexcept;
+    void routeConnection (PlaySnapshot& s, PlaySnapshot::Track& from, PlaySnapshot::Track::Connection&, const float* const* src,
+                          float gainL, float gainR, float* const* out, int numOuts, int offset, int len) noexcept;
+
+    /** Posición y tempo para los plugins (delays sincronizados, arpegiadores…). Solo hilo de audio. */
+    struct HostPlayHead : juce::AudioPlayHead
+    {
+        juce::Optional<PositionInfo> getPosition() const override { return info; }
+        PositionInfo info;
+    } hostPlayHead;
+    void updatePlayHead (const PlaySnapshot&, juce::int64 pos, bool isPlaying) noexcept;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

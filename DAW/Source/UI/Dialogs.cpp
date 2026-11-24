@@ -326,6 +326,12 @@ void choosePlugin (PluginManager& pm, bool instruments, juce::Component* target,
         m.addItem (juce::String::fromUTF8 ("Piano básico"), [onChosen] { onChosen (PluginManager::internalSlot ("piano")); });
         m.addItem (juce::String::fromUTF8 ("Pad básico"), [onChosen] { onChosen (PluginManager::internalSlot ("pad")); });
     }
+    else
+    {
+        m.addSectionHeader ("Incluidos");
+        m.addItem (juce::String::fromUTF8 ("Reverb básica"), [onChosen] { onChosen (PluginManager::internalSlot ("reverb")); });
+        m.addItem (juce::String::fromUTF8 ("Delay básico"), [onChosen] { onChosen (PluginManager::internalSlot ("delay")); });
+    }
     std::map<juce::String, juce::PopupMenu> byMaker;
     juce::PopupMenu worship;
     for (auto& d : list)

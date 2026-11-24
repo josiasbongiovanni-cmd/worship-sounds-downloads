@@ -144,6 +144,118 @@ void BasicSynthProcessor::setStateInformation (const void* data, int size)
 }
 
 //==============================================================================
+BuiltInEffect::BuiltInEffect()
+    : juce::AudioProcessor (BusesProperties().withInput ("In", juce::AudioChannelSet::stereo(), true)
+                                             .withOutput ("Out", juce::AudioChannelSet::stereo(), true)) {}
+
+void BuiltInEffect::getStateInformation (juce::MemoryBlock& block)
+{
+    juce::MemoryOutputStream out (block, false);
+    for (auto* p : getParameters()) out.writeFloat (p->getValue());
+}
+
+void BuiltInEffect::setStateInformation (const void* data, int size)
+{
+    juce::MemoryInputStream in (data, (size_t) size, false);
+    for (auto* p : getParameters())
+        if (in.getNumBytesRemaining() >= 4) p->setValueNotifyingHost (in.readFloat());
+}
+
+ReverbProcessor::ReverbProcessor()
+{
+    addParameter (size = new juce::AudioParameterFloat ({ "size", 1 }, juce::String::fromUTF8 ("Tamaño"), 0.0f, 1.0f, 0.75f));
+    addParameter (damping = new juce::AudioParameterFloat ({ "damping", 1 }, juce::String::fromUTF8 ("Amortiguación"), 0.0f, 1.0f, 0.45f));
+    addParameter (width = new juce::AudioParameterFloat ({ "width", 1 }, "Ancho", 0.0f, 1.0f, 1.0f));
+    addParameter (wet = new juce::AudioParameterFloat ({ "wet", 1 }, juce::String::fromUTF8 ("Húmedo"), 0.0f, 1.0f, 1.0f));
+    addParameter (dry = new juce::AudioParameterFloat ({ "dry", 1 }, "Seco", 0.0f, 1.0f, 0.0f));
+}
+
+const juce::String ReverbProcessor::getName() const { return juce::String::fromUTF8 ("Reverb básica"); }
+
+void ReverbProcessor::prepareToPlay (double sampleRate, int)
+{
+    reverb.setSampleRate (sampleRate);
+    reverb.reset();
+}
+
+void ReverbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    juce::Reverb::Parameters p;
+    p.roomSize = size->get();
+    p.damping = damping->get();
+    p.width = width->get();
+    p.wetLevel = wet->get();
+    p.dryLevel = dry->get();
+    reverb.setParameters (p);
+    if (buffer.getNumChannels() >= 2) reverb.processStereo (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples());
+    else if (buffer.getNumChannels() == 1) reverb.processMono (buffer.getWritePointer (0), buffer.getNumSamples());
+}
+
+juce::StringArray DelayProcessor::syncNames()
+{
+    return { "Libre (ms)", "1/4", "1/8 con puntillo", "1/8", "1/16" };
+}
+
+DelayProcessor::DelayProcessor()
+{
+    addParameter (sync = new juce::AudioParameterChoice ({ "sync", 1 }, "Sincronizar al tempo", syncNames(), 2));
+    addParameter (timeMs = new juce::AudioParameterFloat ({ "time", 1 }, "Tiempo (ms)", 20.0f, 1500.0f, 375.0f));
+    addParameter (feedback = new juce::AudioParameterFloat ({ "feedback", 1 }, juce::String::fromUTF8 ("Realimentación"), 0.0f, 0.95f, 0.35f));
+    addParameter (tone = new juce::AudioParameterFloat ({ "tone", 1 }, "Tono", 0.0f, 1.0f, 0.6f));
+    addParameter (mix = new juce::AudioParameterFloat ({ "mix", 1 }, juce::String::fromUTF8 ("Húmedo"), 0.0f, 1.0f, 1.0f));
+}
+
+const juce::String DelayProcessor::getName() const { return juce::String::fromUTF8 ("Delay básico"); }
+
+void DelayProcessor::prepareToPlay (double sampleRate, int)
+{
+    sr = sampleRate;
+    line.setSize (2, (int) (sampleRate * 3.2) + 8);
+    line.clear();
+    writePos = 0;
+    lowState[0] = lowState[1] = 0;
+    delaySamples.reset (sampleRate, 0.08);
+    delaySamples.setCurrentAndTargetValue ((float) (timeMs->get() * 0.001 * sampleRate));
+}
+
+void DelayProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    double seconds = timeMs->get() * 0.001;
+    if (sync->getIndex() > 0)
+    {
+        double bpm = 120;
+        if (auto* ph = getPlayHead())
+            if (auto pos = ph->getPosition())
+                if (auto b = pos->getBpm()) bpm = *b;
+        static const double beats[] = { 0, 1.0, 0.75, 0.5, 0.25 };
+        seconds = beats[sync->getIndex()] * 60.0 / juce::jlimit (20.0, 400.0, bpm);
+    }
+    delaySamples.setTargetValue ((float) juce::jlimit (1.0, (double) line.getNumSamples() - 4, seconds * sr));
+    const auto size = line.getNumSamples();
+    const float fb = feedback->get(), wetGain = mix->get();
+    const float coeff = 1.0f - std::exp (-2.0f * juce::MathConstants<float>::pi * (1500.0f + tone->get() * 14000.0f) / (float) sr);
+    const int chans = juce::jmin (2, buffer.getNumChannels());
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        const auto d = delaySamples.getNextValue();
+        const auto readPos = (float) writePos - d + (float) size;
+        const int i0 = (int) readPos % size;
+        const int i1 = (i0 + 1) % size;
+        const float frac = readPos - std::floor (readPos);
+        for (int c = 0; c < chans; ++c)
+        {
+            auto* l = line.getWritePointer (c);
+            const auto delayed = l[i0] + (l[i1] - l[i0]) * frac;
+            lowState[c] += coeff * (delayed - lowState[c]);
+            const auto in = buffer.getSample (c, i);
+            l[writePos] = in + lowState[c] * fb;
+            buffer.setSample (c, i, in * (1.0f - wetGain) + lowState[c] * wetGain);
+        }
+        writePos = (writePos + 1) % size;
+    }
+}
+
+//==============================================================================
 LatencyTestProcessor::LatencyTestProcessor (int latencySamples)
     : juce::AudioProcessor (BusesProperties().withInput ("In", juce::AudioChannelSet::stereo(), true)
                                              .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),

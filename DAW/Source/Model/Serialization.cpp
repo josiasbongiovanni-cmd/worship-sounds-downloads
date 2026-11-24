@@ -111,6 +111,33 @@ var toVar (const Project& p)
         set (o, "inputChannel", t.input.channel);
         set (o, "monitor", toString (t.monitor));
         set (o, "directOutPair", t.directOutPair);
+        if (! t.outputBus.isNull()) set (o, "outputBus", t.outputBus.toDashedString());
+        set (o, "automationMode", toString (t.automationMode));
+        juce::Array<var> sends;
+        for (auto& s : t.sends)
+        {
+            auto so = obj();
+            set (so, "id", s.id.toDashedString()); set (so, "target", s.target.toDashedString());
+            set (so, "levelDb", s.levelDb); set (so, "pan", s.pan); set (so, "preFader", s.preFader); set (so, "muted", s.muted);
+            sends.add (so);
+        }
+        set (o, "sends", list (sends));
+        juce::Array<var> lanes;
+        for (auto& l : t.automation)
+        {
+            auto lo = obj();
+            static const char* kinds[] = { "volume", "pan", "send", "plugin" };
+            set (lo, "id", l.id.toDashedString());
+            set (lo, "target", kinds[(int) l.target.kind]);
+            if (! l.target.ref.isNull()) set (lo, "ref", l.target.ref.toDashedString());
+            if (l.target.param >= 0) { set (lo, "param", l.target.param); set (lo, "paramName", l.target.paramName); }
+            set (lo, "visible", l.visible); set (lo, "active", l.active);
+            juce::Array<var> pts;
+            for (auto& pt : l.points) { juce::Array<var> pair { pt.time, pt.value }; pts.add (var (pair)); }
+            set (lo, "points", list (pts));
+            lanes.add (lo);
+        }
+        set (o, "automation", list (lanes));
         auto eq = obj();
         set (eq, "low", t.eq.lowGain); set (eq, "mid", t.eq.midGain); set (eq, "high", t.eq.highGain); set (eq, "enabled", t.eq.enabled);
         set (o, "eq", eq);
@@ -311,6 +338,35 @@ Project fromVar (const var& root)
             t.input.channel = integer (o, "inputChannel");
             t.monitor = monitorModeFromString (str (o, "monitor"));
             t.directOutPair = integer (o, "directOutPair");
+            if (o.hasProperty ("outputBus")) t.outputBus = uuid (o, "outputBus");
+            t.automationMode = automationModeFromString (str (o, "automationMode", "read"));
+            if (auto* sends = o.getProperty ("sends", var()).getArray())
+                for (auto& so : *sends)
+                {
+                    Send s;
+                    s.id = uuid (so); s.target = uuid (so, "target");
+                    s.levelDb = num (so, "levelDb", -12); s.pan = num (so, "pan");
+                    s.preFader = flag (so, "preFader"); s.muted = flag (so, "muted");
+                    t.sends.push_back (s);
+                }
+            if (auto* lanes = o.getProperty ("automation", var()).getArray())
+                for (auto& lo : *lanes)
+                {
+                    AutomationLane l;
+                    l.id = uuid (lo);
+                    const auto kind = str (lo, "target", "volume");
+                    l.target.kind = kind == "pan" ? AutomationTarget::Kind::pan : kind == "send" ? AutomationTarget::Kind::sendLevel
+                                  : kind == "plugin" ? AutomationTarget::Kind::pluginParam : AutomationTarget::Kind::volume;
+                    if (lo.hasProperty ("ref")) l.target.ref = uuid (lo, "ref");
+                    l.target.param = integer (lo, "param", -1);
+                    l.target.paramName = str (lo, "paramName");
+                    l.visible = flag (lo, "visible", true); l.active = flag (lo, "active", true);
+                    if (auto* pts = lo.getProperty ("points", var()).getArray())
+                        for (auto& pt : *pts)
+                            if (pt.isArray() && pt.size() >= 2) l.points.push_back ({ (double) pt[0], (double) pt[1] });
+                    l.sortPoints();
+                    t.automation.push_back (std::move (l));
+                }
             auto eq = o.getProperty ("eq", var());
             t.eq.lowGain = (float) num (eq, "low"); t.eq.midGain = (float) num (eq, "mid");
             t.eq.highGain = (float) num (eq, "high"); t.eq.enabled = flag (eq, "enabled", true);

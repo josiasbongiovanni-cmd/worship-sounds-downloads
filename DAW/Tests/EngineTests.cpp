@@ -254,6 +254,106 @@ struct EngineTests : juce::UnitTest
             expect (out.getMagnitude (2, 24000, 200) > 0.1f, "click en el tiempo 2");
         }
 
+        beginTest ("Envío post-fader a un bus con latencia: todo llega alineado"_u);
+        {
+            Rig rig;
+            auto f = writeImpulseFile (rig.folder, "imp.wav", 1.0, { 2000 });
+            auto& bus = edit::addTrack (rig.project, "Reverb", TrackRole::bus);
+            bus.inserts.push_back (PluginManager::internalSlot ("latency:300"));
+            auto busId = bus.id;
+            auto& a = edit::addTrack (rig.project, "Voz");
+            auto aid = a.id;
+            edit::addClip (rig.project, aid, rig.clip (f, 0.0, 1.0));
+            expect (edit::addSend (rig.project, aid, busId, 0.0).has_value());
+            rig.apply();
+            expectEquals (rig.engine.currentSnapshot()->maxLatency, 300);
+            auto out = rig.render (0, 1.0);
+            auto peaks = peaksAbove (out, 0.5f);
+            // Directo (retrasado 300 para alinear) + bus (300 de latencia propia) = una sola muestra con valor 2.
+            expectEquals ((int) peaks.size(), 1);
+            if (! peaks.empty()) { expectEquals (peaks[0], 2300); expectWithinAbsoluteError (out.getSample (0, 2300), 2.0f, 1.0e-3f); }
+        }
+
+        beginTest ("Salida a un bus: el volumen del bus se aplica"_u);
+        {
+            Rig rig;
+            auto f = writeImpulseFile (rig.folder, "imp.wav", 1.0, { 1000 });
+            auto& bus = edit::addTrack (rig.project, "Voces", TrackRole::bus);
+            bus.volumeDb = -6;
+            auto busId = bus.id;
+            auto& a = edit::addTrack (rig.project, "Voz");
+            auto aid = a.id;
+            edit::addClip (rig.project, aid, rig.clip (f, 0.0, 1.0));
+            expect (edit::setOutputBus (rig.project, aid, busId));
+            expect (! edit::setOutputBus (rig.project, busId, aid));    // una pista normal no es un bus
+            rig.apply();
+            rig.render (0, 0.05);   // primer bloque: la rampa de ganancia arranca en el valor final
+            auto out = rig.render (0, 1.0);
+            expectWithinAbsoluteError (out.getSample (0, 1000), Decibels::toGain (-6.0), 1.0e-3f);
+        }
+
+        beginTest ("Envío pre-fader no depende del volumen de la pista"_u);
+        {
+            Rig rig;
+            auto f = writeImpulseFile (rig.folder, "imp.wav", 1.0, { 1000 });
+            auto& bus = edit::addTrack (rig.project, "In-ears", TrackRole::bus);
+            auto busId = bus.id;
+            auto& a = edit::addTrack (rig.project, "Voz");
+            a.volumeDb = Decibels::silence;
+            auto aid = a.id;
+            edit::addClip (rig.project, aid, rig.clip (f, 0.0, 1.0));
+            expect (edit::addSend (rig.project, aid, busId, 0.0, true).has_value());
+            rig.apply();
+            rig.render (0, 0.05);
+            auto out = rig.render (0, 1.0);
+            expectWithinAbsoluteError (out.getSample (0, 1000), 1.0f, 1.0e-3f);
+        }
+
+        beginTest ("Automatización de volumen (y modo apagado la ignora)"_u);
+        {
+            Rig rig;
+            // Impulsos en el beat 0,5 y en el beat 2,5
+            auto f = writeImpulseFile (rig.folder, "imp.wav", 2.0, { 12000, 60000 });
+            auto& a = edit::addTrack (rig.project, "Voz");
+            auto aid = a.id;
+            edit::addClip (rig.project, aid, rig.clip (f, 0.0, 2.0));
+            auto& lane = edit::automation::ensureLane (*rig.project.findTrack (aid), { AutomationTarget::Kind::volume }, 0.0);
+            edit::automation::addPoint (lane, 2.0, 0.0);
+            edit::automation::addPoint (lane, 2.001, -12.0);
+            rig.apply();
+            rig.render (0, 0.05);
+            auto out = rig.render (0, 2.0);
+            expectWithinAbsoluteError (out.getSample (0, 12000), 1.0f, 1.0e-3f);
+            expectWithinAbsoluteError (out.getSample (0, 60000), Decibels::toGain (-12.0), 2.0e-3f);
+
+            rig.project.findTrack (aid)->automationMode = AutomationMode::off;
+            rig.apply();
+            rig.render (0, 0.05);
+            out = rig.render (0, 2.0);
+            expectWithinAbsoluteError (out.getSample (0, 60000), 1.0f, 1.0e-3f);
+        }
+
+        beginTest ("Automatización de un parámetro de plugin"_u);
+        {
+            Rig rig;
+            auto& a = edit::addTrack (rig.project, "Voz");
+            a.inserts.push_back (PluginManager::internalSlot ("reverb"));
+            auto slotId = a.inserts.back().id;
+            AutomationTarget target { AutomationTarget::Kind::pluginParam, slotId, 3, "Wet" };
+            auto& lane = edit::automation::ensureLane (a, target, 0.25);
+            edit::automation::addPoint (lane, 4.0, 0.75);
+            rig.apply();
+            auto plugin = rig.engine.findPlugin (slotId);
+            expect (plugin != nullptr);
+            if (plugin != nullptr)
+            {
+                rig.render (0, 0.1);
+                expectWithinAbsoluteError (plugin->processor->getParameters()[3]->getValue(), 0.25f, 0.02f);
+                rig.render (4.0, 0.1);
+                expectWithinAbsoluteError (plugin->processor->getParameters()[3]->getValue(), 0.75f, 0.02f);
+            }
+        }
+
         beginTest ("Render (exportar) con stems y normalización"_u);
         {
             Rig rig;

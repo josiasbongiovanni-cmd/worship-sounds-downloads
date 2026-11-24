@@ -27,6 +27,132 @@ Track& addTrack (Project& p, const juce::String& name, TrackRole role, juce::Str
 void removeTrack (Project& p, const juce::Uuid& id)
 {
     p.tracks.erase (std::remove_if (p.tracks.begin(), p.tracks.end(), [&] (auto& t) { return t.id == id; }), p.tracks.end());
+    // Lo que mandaba a ese bus vuelve al Master; sus envíos (y sus carriles) se quitan.
+    for (auto& t : p.tracks)
+    {
+        if (t.outputBus == id) t.outputBus = juce::Uuid::null();
+        for (auto& s : std::vector<Send> (t.sends))
+            if (s.target == id) removeSend (p, t.id, s.id);
+    }
+}
+
+//==============================================================================
+std::optional<juce::Uuid> addSend (Project& p, const juce::Uuid& from, const juce::Uuid& bus, double levelDb, bool preFader)
+{
+    auto* t = p.findTrack (from);
+    if (t == nullptr || ! p.canRouteTo (from, bus)) return {};
+    for (auto& s : t->sends) if (s.target == bus) return s.id;
+    Send s;
+    s.target = bus;
+    s.levelDb = levelDb;
+    s.preFader = preFader;
+    t->sends.push_back (s);
+    return s.id;
+}
+
+void removeSend (Project& p, const juce::Uuid& trackId, const juce::Uuid& sendId)
+{
+    if (auto* t = p.findTrack (trackId))
+    {
+        t->sends.erase (std::remove_if (t->sends.begin(), t->sends.end(), [&] (auto& s) { return s.id == sendId; }), t->sends.end());
+        t->automation.erase (std::remove_if (t->automation.begin(), t->automation.end(), [&] (auto& l)
+        {
+            return l.target.kind == AutomationTarget::Kind::sendLevel && l.target.ref == sendId;
+        }), t->automation.end());
+    }
+}
+
+bool setOutputBus (Project& p, const juce::Uuid& trackId, const juce::Uuid& bus)
+{
+    auto* t = p.findTrack (trackId);
+    if (t == nullptr) return false;
+    if (bus.isNull()) { t->outputBus = bus; return true; }
+    const auto old = t->outputBus;
+    t->outputBus = juce::Uuid::null();
+    if (! p.canRouteTo (trackId, bus)) { t->outputBus = old; return false; }
+    t->outputBus = bus;
+    t->directOutPair = 0;
+    return true;
+}
+
+//==============================================================================
+namespace automation
+{
+    AutomationLane& ensureLane (Track& t, const AutomationTarget& target, double initialValue)
+    {
+        if (auto* l = t.findLane (target)) { l->visible = true; return *l; }
+        AutomationLane l;
+        l.target = target;
+        l.points.push_back ({ 0.0, initialValue });
+        t.automation.push_back (std::move (l));
+        return t.automation.back();
+    }
+
+    int addPoint (AutomationLane& l, Beats time, double value)
+    {
+        time = juce::jmax (0.0, time);
+        value = juce::jlimit (l.target.minValue(), l.target.maxValue(), value);
+        for (int i = 0; i < (int) l.points.size(); ++i)
+            if (std::abs (l.points[(size_t) i].time - time) < 1.0e-4) { l.points[(size_t) i].value = value; return i; }
+        auto it = std::upper_bound (l.points.begin(), l.points.end(), time, [] (Beats x, const AutomationPoint& p) { return x < p.time; });
+        it = l.points.insert (it, { time, value });
+        return (int) (it - l.points.begin());
+    }
+
+    void removePoints (AutomationLane& l, Beats from, Beats to)
+    {
+        l.points.erase (std::remove_if (l.points.begin(), l.points.end(), [&] (auto& p) { return p.time >= from && p.time <= to; }), l.points.end());
+    }
+
+    void writeValue (AutomationLane& l, Beats from, Beats to, double value)
+    {
+        if (to < from) std::swap (from, to);
+        // Lo que viene después conserva su forma: se ancla el valor anterior justo después de lo escrito.
+        const bool hasLater = ! l.points.empty() && l.points.back().time > to + 1.0e-3;
+        const double laterValue = hasLater ? l.valueAt (to + 1.0e-3) : 0.0;
+        removePoints (l, from + 1.0e-6, to + 1.0e-3);
+        addPoint (l, to, value);
+        if (hasLater) addPoint (l, to + 1.0e-3, laterValue);
+    }
+
+    void simplify (AutomationLane& l, double tolerance)
+    {
+        if (l.points.size() < 3) return;
+        std::vector<AutomationPoint> out { l.points.front() };
+        for (size_t i = 1; i + 1 < l.points.size(); ++i)
+        {
+            const auto& a = out.back();
+            const auto& b = l.points[i];
+            const auto& c = l.points[i + 1];
+            const auto span = c.time - a.time;
+            const auto expected = span > 1.0e-9 ? a.value + (c.value - a.value) * (b.time - a.time) / span : a.value;
+            if (std::abs (expected - b.value) > tolerance) out.push_back (b);
+        }
+        out.push_back (l.points.back());
+        l.points = std::move (out);
+    }
+
+    juce::String laneName (const Project& p, const Track& t, const AutomationLane& l)
+    {
+        switch (l.target.kind)
+        {
+            case AutomationTarget::Kind::volume: return "Volumen";
+            case AutomationTarget::Kind::pan:    return "Paneo";
+            case AutomationTarget::Kind::sendLevel:
+                for (auto& s : t.sends)
+                    if (s.id == l.target.ref)
+                        if (auto* b = p.findTrack (s.target)) return juce::String::fromUTF8 ("Envío › ") + b->name;
+                return juce::String::fromUTF8 ("Envío");
+            case AutomationTarget::Kind::pluginParam:
+            {
+                juce::String plugin;
+                for (auto& s : t.inserts) if (s.id == l.target.ref) plugin = s.name;
+                if (t.instrument && t.instrument->id == l.target.ref) plugin = t.instrument->name;
+                return (plugin.isNotEmpty() ? plugin + juce::String::fromUTF8 (" › ") : juce::String()) + l.target.paramName;
+            }
+        }
+        return {};
+    }
 }
 
 void moveTrack (Project& p, const juce::Uuid& id, int newIndex)
